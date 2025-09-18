@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const fetch = require('node-fetch');
+// Use global fetch instead of node-fetch for Netlify compatibility
 
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
