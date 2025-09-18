@@ -21,6 +21,11 @@
   to = "/.netlify/functions/track-click/:id"
   status = 200
 
+[[redirects]]
+  from = "/webhook/mailgun"
+  to = "/.netlify/functions/mailgun-webhook"
+  status = 200
+
 [[headers]]
   for = "/track/*"
   [headers.values]
