@@ -220,7 +220,7 @@ function extractTrackingId(formData, subject, body) {
   // Method 1: Look for tracking ID in recipient email address (most reliable)
   const recipient = formData.recipient || formData.To || formData.to;
   if (recipient) {
-    const emailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
+    const emailMatch = recipient.match(/tracking-(\w+)@/);
     if (emailMatch) {
       return emailMatch[1];
     }
