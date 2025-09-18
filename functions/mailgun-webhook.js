@@ -1,8 +1,8 @@
-import crypto from 'crypto';
-import fetch from 'node-fetch';
+const crypto = require('crypto');
+const fetch = require('node-fetch');
 
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
-export async function handler(event, context) {
+exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
     method: event.httpMethod,
     headers: event.headers,
@@ -260,7 +260,7 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
     }
 
     // Import Zilliz client
-    const { MilvusClient } = await import('@zilliz/milvus2-sdk-node');
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
     
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
@@ -548,7 +548,7 @@ async function getRepliesForTrackingId(trackingId) {
       return [];
     }
 
-    const { MilvusClient } = await import('@zilliz/milvus2-sdk-node');
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
@@ -576,7 +576,7 @@ async function getRecentReplies(limit = 10) {
       return [];
     }
 
-    const { MilvusClient } = await import('@zilliz/milvus2-sdk-node');
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
