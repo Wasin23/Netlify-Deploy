@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import fetch from 'node-fetch';
 
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 export async function handler(event, context) {
