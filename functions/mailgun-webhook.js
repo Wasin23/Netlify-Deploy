@@ -709,6 +709,25 @@ async function createRepliesCollection(client) {
         max_length: 255,
       },
       {
+        name: 'ai_response',
+        data_type: 'VarChar',
+        max_length: 5000,
+      },
+      {
+        name: 'ai_response_sent',
+        data_type: 'Bool',
+      },
+      {
+        name: 'ai_response_timestamp',
+        data_type: 'VarChar',
+        max_length: 50,
+      },
+      {
+        name: 'ai_response_message_id',
+        data_type: 'VarChar',
+        max_length: 255,
+      },
+      {
         name: 'vector',
         data_type: 'FloatVector',
         dim: 128,
