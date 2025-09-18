@@ -376,15 +376,15 @@ The ExaMark Team
 
 Message ID: ${trackingId} | Powered by ExaMark AI`;
 
-    // Send email via Mailgun API
-    const formData = new FormData();
-    formData.append('from', fromEmail);
-    formData.append('to', toEmail);
-    formData.append('subject', subject);
-    formData.append('text', textContent);
-    formData.append('html', emailHtml);
-    formData.append('o:tag', 'auto-response');
-    formData.append('o:tag', `tracking-${trackingId}`);
+    // Send email via Mailgun API - use URLSearchParams instead of FormData
+    const params = new URLSearchParams();
+    params.append('from', fromEmail);
+    params.append('to', toEmail);
+    params.append('subject', subject);
+    params.append('text', textContent);
+    params.append('html', emailHtml);
+    params.append('o:tag', 'auto-response');
+    params.append('o:tag', `tracking-${trackingId}`);
     
     console.log('[AUTO RESPONSE] Sending email...', { from: fromEmail, to: toEmail, subject });
 
@@ -392,8 +392,9 @@ Message ID: ${trackingId} | Powered by ExaMark AI`;
       method: 'POST',
       headers: {
         'Authorization': `Basic ${btoa(`api:${process.env.MAILGUN_API_KEY}`)}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: formData
+      body: params.toString()
     });
 
     let result;
