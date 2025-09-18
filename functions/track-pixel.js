@@ -31,14 +31,10 @@ exports.handler = async (event, context) => {
           const ipAddress = event.headers['x-forwarded-for'] || 'Unknown';
           
           // Filter out known bots/proxies that cause duplicates
-          const isBot = userAgent.includes('GoogleImageProxy') || 
-                        userAgent.includes('bot') || 
-                        userAgent.includes('crawler') ||
-                        userAgent.includes('scanner') ||
-                        userAgent.includes('proxy');
+          const isBot = false; // DISABLED - was causing tracking to fail
           
           // Check for recent duplicate events (same tracking ID within last 5 minutes)
-          let isDuplicate = false;
+          let isDuplicate = false; // DISABLED - was causing tracking to fail
           try {
             const recentEvents = await client.search({
               collection_name: 'email_tracking_events',
