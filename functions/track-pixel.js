@@ -17,7 +17,7 @@ exports.handler = async (event, context) => {
     console.log('Tracking pixel hit:', { trackingId, path: event.path, query: event.queryStringParameters });
     
     if (trackingId) {
-      // Store to Zilliz
+      // Store to Zilliz with deduplication
       try {
         const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
         
@@ -27,22 +27,67 @@ exports.handler = async (event, context) => {
             token: process.env.ZILLIZ_TOKEN
           });
 
-          const data = [{
-            tracking_id: trackingId,
-            event_type: 'email_open',
-            timestamp: new Date().toISOString(),
-            user_agent: event.headers['user-agent'] || 'Unknown',
-            ip_address: event.headers['x-forwarded-for'] || 'Unknown',
-            email_address: 'Unknown',
-            recipient: 'Unknown',
-            processed: false,
-            dummy_vector: [0.0, 0.0]
-          }];
+          const userAgent = event.headers['user-agent'] || 'Unknown';
+          const ipAddress = event.headers['x-forwarded-for'] || 'Unknown';
+          
+          // Filter out known bots/proxies that cause duplicates
+          const isBot = userAgent.includes('GoogleImageProxy') || 
+                        userAgent.includes('bot') || 
+                        userAgent.includes('crawler') ||
+                        userAgent.includes('scanner') ||
+                        userAgent.includes('proxy');
+          
+          // Check for recent duplicate events (same tracking ID within last 5 minutes)
+          let isDuplicate = false;
+          try {
+            const recentEvents = await client.search({
+              collection_name: 'email_tracking_events',
+              vectors: [[0.0, 0.0]], // Dummy vector for search
+              search_params: { nprobe: 1 },
+              output_fields: ['tracking_id', 'timestamp', 'user_agent'],
+              limit: 100
+            });
+            
+            const now = new Date();
+            const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+            
+            for (const result of recentEvents.results) {
+              if (result.tracking_id === trackingId) {
+                const eventTime = new Date(result.timestamp);
+                if (eventTime > fiveMinutesAgo) {
+                  isDuplicate = true;
+                  console.log(`Duplicate event filtered for ${trackingId}`);
+                  break;
+                }
+              }
+            }
+          } catch (searchError) {
+            console.log('Search error (proceeding with insert):', searchError);
+          }
+          
+          // Only insert if not a bot and not a duplicate
+          if (!isBot && !isDuplicate) {
+            const data = [{
+              tracking_id: trackingId,
+              event_type: 'email_open',
+              timestamp: new Date().toISOString(),
+              user_agent: userAgent,
+              ip_address: ipAddress,
+              email_address: 'Unknown',
+              recipient: 'Unknown',
+              processed: false,
+              dummy_vector: [0.0, 0.0]
+            }];
 
-          await client.insert({
-            collection_name: 'email_tracking_events',
-            data: data
-          });
+            await client.insert({
+              collection_name: 'email_tracking_events',
+              data: data
+            });
+            
+            console.log(`Tracking event recorded for ${trackingId}`);
+          } else {
+            console.log(`Tracking event filtered out for ${trackingId} (bot: ${isBot}, duplicate: ${isDuplicate})`);
+          }
         }
       } catch (e) {
         console.log('Zilliz error:', e);
