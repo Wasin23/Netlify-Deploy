@@ -658,93 +658,88 @@ function generateSimpleVector(text) {
 
 // Create replies collection in Zilliz
 async function createRepliesCollection(client) {
-  const schema = {
-    collection_name: 'email_replies_v2',
-    description: 'Email reply tracking with AI analysis v2',
-    fields: [
-      {
-        name: 'id',
-        data_type: 'VarChar',
-        max_length: 100,
-        is_primary_key: true,
-      },
-      {
-        name: 'tracking_id',
-        data_type: 'VarChar',
-        max_length: 100,
-      },
-      {
-        name: 'from_email',
-        data_type: 'VarChar',
-        max_length: 255,
-      },
-      {
-        name: 'subject',
-        data_type: 'VarChar',
-        max_length: 500,
-      },
-      {
-        name: 'content',
-        data_type: 'VarChar',
-        max_length: 5000,
-      },
-      {
-        name: 'timestamp',
-        data_type: 'VarChar',
-        max_length: 50,
-      },
-      {
-        name: 'sentiment',
-        data_type: 'VarChar',
-        max_length: 20,
-      },
-      {
-        name: 'intent',
-        data_type: 'VarChar',
-        max_length: 50,
-      },
-      {
-        name: 'message_id',
-        data_type: 'VarChar',
-        max_length: 255,
-      },
-      {
-        name: 'ai_response',
-        data_type: 'VarChar',
-        max_length: 5000,
-      },
-      {
-        name: 'ai_response_sent',
-        data_type: 'Bool',
-      },
-      {
-        name: 'ai_response_timestamp',
-        data_type: 'VarChar',
-        max_length: 50,
-      },
-      {
-        name: 'ai_response_message_id',
-        data_type: 'VarChar',
-        max_length: 255,
-      },
-      {
-        name: 'vector',
-        data_type: 'FloatVector',
-        dim: 128,
-      },
-    ],
-  };
-
-  await client.createCollection(schema);
+  const { DataType } = await import('@zilliz/milvus2-sdk-node');
   
-  // Create index for vector search
-  await client.createIndex({
-    collection_name: 'email_replies',
-    field_name: 'vector',
-    index_type: 'IVF_FLAT',
-    metric_type: 'L2',
-    params: { nlist: 1024 }
+  const schema = [
+    {
+      name: 'id',
+      data_type: DataType.Int64,
+      is_primary_key: true,
+      autoID: true
+    },
+    {
+      name: 'tracking_id',
+      data_type: DataType.VarChar,
+      max_length: 100
+    },
+    {
+      name: 'from_email',
+      data_type: DataType.VarChar,
+      max_length: 200
+    },
+    {
+      name: 'subject',
+      data_type: DataType.VarChar,
+      max_length: 500
+    },
+    {
+      name: 'content',
+      data_type: DataType.VarChar,
+      max_length: 5000
+    },
+    {
+      name: 'timestamp',
+      data_type: DataType.VarChar,
+      max_length: 50
+    },
+    {
+      name: 'sentiment',
+      data_type: DataType.VarChar,
+      max_length: 50
+    },
+    {
+      name: 'intent',
+      data_type: DataType.VarChar,
+      max_length: 100
+    },
+    {
+      name: 'ai_response',
+      data_type: DataType.VarChar,
+      max_length: 5000
+    },
+    {
+      name: 'ai_response_sent',
+      data_type: DataType.Bool
+    },
+    {
+      name: 'ai_response_timestamp',
+      data_type: DataType.VarChar,
+      max_length: 50
+    },
+    {
+      name: 'ai_response_message_id',
+      data_type: DataType.VarChar,
+      max_length: 200
+    },
+    {
+      name: 'dummy_vector',
+      data_type: DataType.FloatVector,
+      dim: 2
+    }
+  ];
+
+  await client.createCollection({
+    collection_name: 'email_replies_v2',
+    fields: schema,
+    description: 'Email replies with AI responses'
   });
 
-  console.log('📦 [ZILLIZ] Email replies collection created');
+  console.log('[ZILLIZ] Created email_replies_v2 collection with proper schema');
+}
+
+// Generate simple vector for storage (placeholder)
+function generateSimpleVector(text) {
+  // Simple hash-based vector generation for demo
+  const hash = text.split('').reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) & 0xffffffff, 0);
+  return [hash % 100 / 100, (hash * 2) % 100 / 100];
 }
