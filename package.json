@@ -4,6 +4,6 @@
   "type": "module",
   "dependencies": {
     "@zilliz/milvus2-sdk-node": "^2.4.9",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^2.7.0"
   }
 }
