@@ -109,16 +109,7 @@ export async function handler(event, context) {
       console.log('[NETLIFY WEBHOOK] Found tracking ID:', trackingId);
       emailData.originalTrackingId = trackingId;
       
-      // Store reply in Zilliz with AI analysis
-      try {
-        zillizResult = await storeReplyInZilliz(emailData, trackingId);
-        console.log('💬 [NETLIFY WEBHOOK] Zilliz result:', zillizResult);
-      } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to store reply in Zilliz:', error);
-        zillizResult = { error: error.message, success: false };
-      }
-
-      // Generate AI response suggestion
+      // Generate AI response suggestion first
       try {
         aiResponse = await generateAIResponse(emailData);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated');
@@ -137,6 +128,15 @@ export async function handler(event, context) {
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
         aiResponse = { error: error.message };
+      }
+
+      // Store reply in Zilliz with AI response chain
+      try {
+        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
+        console.log('💬 [NETLIFY WEBHOOK] Zilliz result with AI response:', zillizResult);
+      } catch (error) {
+        console.error('❌ [NETLIFY WEBHOOK] Failed to store reply in Zilliz:', error);
+        zillizResult = { error: error.message, success: false };
       }
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
@@ -240,7 +240,7 @@ function extractTrackingId(formData, subject, body) {
 }
 
 // Enhanced function to store reply in Zilliz with better error handling
-async function storeReplyInZilliz(emailData, trackingId) {
+async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
     console.log('[ZILLIZ] Attempting to store reply...');
     
@@ -263,7 +263,7 @@ async function storeReplyInZilliz(emailData, trackingId) {
     const sentiment = analyzeSentiment(emailData.body);
     const intent = classifyIntent(emailData.body);
     
-    // Prepare reply data for storage
+    // Prepare reply data for storage with AI response chain
     const replyData = {
       id: emailData.id,
       tracking_id: trackingId,
@@ -274,11 +274,22 @@ async function storeReplyInZilliz(emailData, trackingId) {
       sentiment: sentiment,
       intent: intent,
       message_id: emailData.messageId || '',
+      // Store AI response chain
+      ai_response: aiResponse?.response || null,
+      ai_response_sent: aiResponse?.emailSent?.success || false,
+      ai_response_timestamp: aiResponse?.emailSent?.timestamp || null,
+      ai_response_message_id: aiResponse?.emailSent?.messageId || null,
       // Vector embedding (simplified - in production you'd use actual embeddings)
       vector: generateSimpleVector(emailData.body || '')
     };
 
-    console.log('[ZILLIZ] Prepared reply data:', { id: replyData.id, sentiment, intent });
+    console.log('[ZILLIZ] Prepared reply data with AI response:', { 
+      id: replyData.id, 
+      sentiment, 
+      intent,
+      hasAiResponse: !!aiResponse?.response,
+      aiResponseSent: replyData.ai_response_sent
+    });
 
     // Check if replies collection exists, create if not
     try {
@@ -538,7 +549,7 @@ async function getRepliesForTrackingId(trackingId) {
       vector: [],
       filter: `tracking_id == "${trackingId}"`,
       limit: 100,
-      output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent']
+      output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent', 'ai_response', 'ai_response_sent', 'ai_response_timestamp', 'ai_response_message_id']
     });
 
     return searchResult.results || [];
@@ -565,7 +576,7 @@ async function getRecentReplies(limit = 10) {
       collection_name: 'email_replies',
       vector: [],
       limit: limit,
-      output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent']
+      output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent', 'ai_response', 'ai_response_sent', 'ai_response_timestamp', 'ai_response_message_id']
     });
 
     return searchResult.results || [];

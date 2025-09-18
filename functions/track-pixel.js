@@ -36,36 +36,30 @@ exports.handler = async (event, context) => {
                        userAgent.includes('spider') ||
                        userAgent.includes('facebookexternalhit');
           
-          // Check for recent duplicate events (same tracking ID + user agent within last 30 seconds)
-          let isDuplicate = false;
+          // Check if this email has EVER been opened before (single open tracking)
+          let alreadyOpened = false;
           try {
-            const recentEvents = await client.search({
+            const existingEvents = await client.search({
               collection_name: 'email_tracking_events',
               vectors: [[0.0, 0.0]], // Dummy vector for search
               search_params: { nprobe: 1 },
-              output_fields: ['tracking_id', 'timestamp', 'user_agent'],
-              limit: 50
+              output_fields: ['tracking_id', 'event_type'],
+              limit: 100
             });
             
-            const now = new Date();
-            const thirtySecondsAgo = new Date(now.getTime() - 30 * 1000); // Reduced from 5 minutes to 30 seconds
-            
-            for (const result of recentEvents.results) {
-              if (result.tracking_id === trackingId) {
-                const eventTime = new Date(result.timestamp);
-                if (eventTime > thirtySecondsAgo && result.user_agent === userAgent) {
-                  isDuplicate = true;
-                  console.log(`Duplicate event filtered for ${trackingId} within 30 seconds`);
-                  break;
-                }
+            for (const result of existingEvents.results) {
+              if (result.tracking_id === trackingId && result.event_type === 'email_open') {
+                alreadyOpened = true;
+                console.log(`Email ${trackingId} already marked as opened`);
+                break;
               }
             }
           } catch (searchError) {
             console.log('Search error (proceeding with insert):', searchError);
           }
           
-          // Only insert if not a bot and not a duplicate
-          if (!isBot && !isDuplicate) {
+          // Only insert if not a bot and not already opened
+          if (!isBot && !alreadyOpened) {
             const data = [{
               tracking_id: trackingId,
               event_type: 'email_open',
@@ -83,9 +77,9 @@ exports.handler = async (event, context) => {
               data: data
             });
             
-            console.log(`Tracking event recorded for ${trackingId}`);
+            console.log(`Email ${trackingId} marked as opened for first time`);
           } else {
-            console.log(`Tracking event filtered out for ${trackingId} (bot: ${isBot}, duplicate: ${isDuplicate})`);
+            console.log(`Tracking event filtered out for ${trackingId} (bot: ${isBot}, already opened: ${alreadyOpened})`);
           }
         }
       } catch (e) {
