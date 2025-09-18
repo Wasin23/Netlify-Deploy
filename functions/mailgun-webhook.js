@@ -207,19 +207,28 @@ function verifyWebhookSignature(token, timestamp, signature, signingKey) {
 
 // Function to extract tracking ID from various sources
 function extractTrackingId(formData, subject, body) {
-  // Method 1: Look for tracking ID in subject line
+  // Method 1: Look for tracking ID in recipient email address (most reliable)
+  const recipient = formData.recipient || formData.To || formData.to;
+  if (recipient) {
+    const emailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
+    if (emailMatch) {
+      return emailMatch[1];
+    }
+  }
+  
+  // Method 2: Look for tracking ID in subject line
   const subjectMatch = subject?.match(/\[(\w+)\]/);
   if (subjectMatch) {
     return subjectMatch[1];
   }
   
-  // Method 2: Look for tracking ID in body text
+  // Method 3: Look for tracking ID in body text
   const bodyMatch = body?.match(/tracking[_\s]*id[:\s]*(\w+)/i);
   if (bodyMatch) {
     return bodyMatch[1];
   }
   
-  // Method 3: Look in In-Reply-To header for message ID patterns
+  // Method 4: Look in In-Reply-To header for message ID patterns
   const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
   if (inReplyTo) {
     const headerMatch = inReplyTo.match(/(\w{8,})/);
@@ -228,7 +237,7 @@ function extractTrackingId(formData, subject, body) {
     }
   }
   
-  // Method 4: Look in References header
+  // Method 5: Look in References header
   const references = formData.References || formData.references;
   if (references) {
     const refMatch = references.match(/(\w{8,})/);
