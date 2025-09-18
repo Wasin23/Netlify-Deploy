@@ -87,15 +87,18 @@ exports.handler = async (event, context) => {
       }
     }
 
-    // Return 1x1 transparent GIF
-    const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    // Return 1x1 transparent PNG (more Gmail-friendly than GIF)
+    const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
     
     return {
       statusCode: 200,
       headers: {
-        'Content-Type': 'image/gif',
+        'Content-Type': 'image/png',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Access-Control-Allow-Origin': '*'
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Access-Control-Allow-Origin': '*',
+        'Content-Length': pixel.length.toString()
       },
       body: pixel.toString('base64'),
       isBase64Encoded: true
