@@ -87,8 +87,8 @@ exports.handler = async (event, context) => {
       }
     }
 
-    // Return 1x1 transparent PNG (more Gmail-friendly than GIF)
-    const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    // Return 1x1 truly transparent PNG
+    const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
     
     return {
       statusCode: 200,
