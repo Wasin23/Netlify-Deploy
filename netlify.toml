@@ -1,0 +1,25 @@
+[build]
+  command = "npm install"
+  publish = "."
+  functions = "functions"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+[[redirects]]
+  from = "/track/pixel/*"
+  to = "/.netlify/functions/track-pixel"
+  status = 200
+
+[[redirects]]
+  from = "/track/click/*"
+  to = "/.netlify/functions/track-click"
+  status = 200
+
+[[headers]]
+  for = "/track/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Headers = "Content-Type"
+    Access-Control-Allow-Methods = "GET, POST, OPTIONS"
+    Cache-Control = "no-cache, no-store, must-revalidate"

@@ -1,0 +1,14 @@
+# Email tracking redirects for ExaMark
+# These redirects handle email opens and clicks properly
+
+# Pixel tracking - redirect to edge function
+/track/pixel/:id.png /.netlify/edge-functions/track-pixel 200
+
+# Click tracking - redirect to edge function  
+/track/click/:id /.netlify/edge-functions/track-click 200
+
+# Fallback pixel tracking (without .png extension)
+/track/pixel/:id /.netlify/edge-functions/track-pixel 200
+
+# Test redirects
+/test-redirect /pixel.html 200
