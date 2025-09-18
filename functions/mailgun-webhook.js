@@ -1,16 +1,6 @@
 const crypto = require('crypto');
 // Use global fetch instead of node-fetch for Netlify compatibility
 
-// Import Zilliz at top level like the working track-pixel function
-let MilvusClient;
-try {
-  const { MilvusClient: ImportedClient } = require('@zilliz/milvus2-sdk-node');
-  MilvusClient = ImportedClient;
-  console.log('[ZILLIZ] Successfully imported MilvusClient');
-} catch (error) {
-  console.error('[ZILLIZ] Failed to import MilvusClient:', error.message);
-}
-
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -269,11 +259,9 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    if (!MilvusClient) {
-      console.log('[ZILLIZ] MilvusClient not available');
-      return { success: false, error: 'MilvusClient import failed', stored: false };
-    }
-
+    // Import MilvusClient locally like the working track-pixel function
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+    
     // Create Zilliz client
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
@@ -557,10 +545,11 @@ function generateRuleBasedResponse(emailData) {
 // Function to get replies for a specific tracking ID
 async function getRepliesForTrackingId(trackingId) {
   try {
-    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN || !MilvusClient) {
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
       return [];
     }
 
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
@@ -584,10 +573,11 @@ async function getRepliesForTrackingId(trackingId) {
 // Function to get recent replies
 async function getRecentReplies(limit = 10) {
   try {
-    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN || !MilvusClient) {
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
       return [];
     }
 
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
