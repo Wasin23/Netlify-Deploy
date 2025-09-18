@@ -1,4 +1,4 @@
-// Simple Mailgun test function
+// Simple Mailgun test function - Updated to refresh env vars
 export async function handler(event, context) {
   console.log('Testing Mailgun API directly...');
   
