@@ -658,72 +658,71 @@ function generateSimpleVector(text) {
 
 // Create replies collection in Zilliz
 async function createRepliesCollection(client) {
-  const { DataType } = await import('@zilliz/milvus2-sdk-node');
-  
+  // Use raw data type numbers to avoid ES module import issues
   const schema = [
     {
       name: 'id',
-      data_type: DataType.Int64,
+      data_type: 5, // Int64
       is_primary_key: true,
       autoID: true
     },
     {
       name: 'tracking_id',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 100
     },
     {
       name: 'from_email',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 200
     },
     {
       name: 'subject',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 500
     },
     {
       name: 'content',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 5000
     },
     {
       name: 'timestamp',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 50
     },
     {
       name: 'sentiment',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 50
     },
     {
       name: 'intent',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 100
     },
     {
       name: 'ai_response',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 5000
     },
     {
       name: 'ai_response_sent',
-      data_type: DataType.Bool
+      data_type: 1, // Bool
     },
     {
       name: 'ai_response_timestamp',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 50
     },
     {
       name: 'ai_response_message_id',
-      data_type: DataType.VarChar,
+      data_type: 21, // VarChar
       max_length: 200
     },
     {
       name: 'dummy_vector',
-      data_type: DataType.FloatVector,
+      data_type: 101, // FloatVector
       dim: 2
     }
   ];
