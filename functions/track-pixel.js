@@ -1,7 +1,20 @@
 exports.handler = async (event, context) => {
   try {
-    // Get tracking ID from path
-    const trackingId = event.path.split('/').pop().replace('.png', '');
+    // Get tracking ID from path parameter or query parameter
+    let trackingId = event.queryStringParameters?.email_id;
+    
+    if (!trackingId) {
+      // Extract from path (e.g., /track/pixel/abc123 or /.netlify/functions/track-pixel/abc123)
+      const pathParts = event.path.split('/');
+      trackingId = pathParts[pathParts.length - 1];
+      
+      // Remove .png extension if present
+      if (trackingId && trackingId.endsWith('.png')) {
+        trackingId = trackingId.slice(0, -4);
+      }
+    }
+    
+    console.log('Tracking pixel hit:', { trackingId, path: event.path, query: event.queryStringParameters });
     
     if (trackingId) {
       // Store to Zilliz

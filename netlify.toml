@@ -7,13 +7,18 @@
   NODE_VERSION = "18"
 
 [[redirects]]
-  from = "/track/pixel/*"
-  to = "/.netlify/functions/track-pixel"
+  from = "/track/pixel/:id"
+  to = "/.netlify/functions/track-pixel/:id"
   status = 200
 
 [[redirects]]
-  from = "/track/click/*"
-  to = "/.netlify/functions/track-click"
+  from = "/track/pixel/:id.png"
+  to = "/.netlify/functions/track-pixel/:id"
+  status = 200
+
+[[redirects]]
+  from = "/track/click/:id"
+  to = "/.netlify/functions/track-click/:id"
   status = 200
 
 [[headers]]

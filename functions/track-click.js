@@ -1,7 +1,17 @@
 exports.handler = async (event, context) => {
   try {
-    const trackingId = event.path.split('/').pop();
+    // Get tracking ID from path parameter or query parameter
+    let trackingId = event.queryStringParameters?.email_id;
+    
+    if (!trackingId) {
+      // Extract from path (e.g., /track/click/abc123)
+      const pathParts = event.path.split('/');
+      trackingId = pathParts[pathParts.length - 1];
+    }
+    
     const redirectUrl = event.queryStringParameters?.url;
+    
+    console.log('Click tracking:', { trackingId, redirectUrl, path: event.path, query: event.queryStringParameters });
     
     if (!trackingId || !redirectUrl) {
       return {
