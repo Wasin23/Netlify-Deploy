@@ -12,7 +12,6 @@
 
 # Fallback pixel tracking (without .png extension)
 /track/pixel/:id /.netlify/functions/track-pixel?email_id=:id 200
-/track/pixel/:id /.netlify/edge-functions/track-pixel 200
 
 # Test redirects
 /test-redirect /pixel.html 200
