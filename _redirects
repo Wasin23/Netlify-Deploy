@@ -7,6 +7,9 @@
 # Click tracking - redirect to function  
 /track/click/:id /.netlify/functions/track-click?email_id=:id 200
 
+# Mailgun webhook for email replies
+/webhooks/mailgun /.netlify/functions/mailgun-webhook 200
+
 # Fallback pixel tracking (without .png extension)
 /track/pixel/:id /.netlify/functions/track-pixel?email_id=:id 200
 /track/pixel/:id /.netlify/edge-functions/track-pixel 200

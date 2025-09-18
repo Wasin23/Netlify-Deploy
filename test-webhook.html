@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Mailgun Webhook - ExaMark</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #4a5568;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .test-section {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border-left: 4px solid #667eea;
+        }
+        .endpoint {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9rem;
+            margin: 1rem 0;
+            word-break: break-all;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            margin: 0.5rem 0.5rem 0.5rem 0;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        .result {
+            background: #f0fff4;
+            border: 1px solid #9ae6b4;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+            font-family: monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+        }
+        .error {
+            background: #fed7d7;
+            border-color: #feb2b2;
+        }
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.9rem;
+            resize: vertical;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #4a5568;
+        }
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔗 Mailgun Webhook Test - ExaMark</h1>
+        
+        <div class="test-section">
+            <h2>📍 Webhook Endpoint</h2>
+            <p>Your Netlify webhook endpoint:</p>
+            <div class="endpoint" id="webhook-url">
+                https://[YOUR-NETLIFY-DOMAIN].netlify.app/webhooks/mailgun
+            </div>
+            <p><strong>Configure this URL in your Mailgun dashboard under Routes or Webhooks.</strong></p>
+        </div>
+
+        <div class="test-section">
+            <h2>🧪 Test Webhook Manually</h2>
+            <p>Simulate a Mailgun reply webhook:</p>
+            
+            <label for="test-from">From Email:</label>
+            <input type="email" id="test-from" value="customer@example.com" />
+            
+            <label for="test-subject">Subject:</label>
+            <input type="text" id="test-subject" value="Re: [ABC123] Your amazing product" />
+            
+            <label for="test-body">Reply Content:</label>
+            <textarea id="test-body" placeholder="Enter the reply content here...">
+This looks great! I'm very interested in learning more about your product. 
+
+Can we schedule a call this week to discuss further?
+
+Thanks!
+            </textarea>
+            
+            <button onclick="testWebhook()">🚀 Send Test Reply</button>
+            <button onclick="testWebhookNegative()">❌ Send Negative Reply</button>
+            <button onclick="testWebhookUnsubscribe()">🚫 Send Unsubscribe</button>
+            
+            <div id="test-result"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>📊 Recent Webhook Activity</h2>
+            <button onclick="checkRecentReplies()">🔍 Check Recent Replies</button>
+            <div id="recent-replies"></div>
+        </div>
+    </div>
+
+    <script>
+        // Update webhook URL with current domain
+        window.addEventListener('load', () => {
+            const webhookUrl = document.getElementById('webhook-url');
+            const currentDomain = window.location.hostname;
+            if (currentDomain !== 'localhost') {
+                webhookUrl.textContent = `https://${currentDomain}/webhooks/mailgun`;
+            }
+        });
+
+        async function testWebhook() {
+            const fromEmail = document.getElementById('test-from').value;
+            const subject = document.getElementById('test-subject').value;
+            const body = document.getElementById('test-body').value;
+            
+            await sendTestWebhook(fromEmail, subject, body);
+        }
+
+        async function testWebhookNegative() {
+            await sendTestWebhook(
+                'unhappy@customer.com',
+                'Re: [DEF456] Not interested',
+                'No thank you, I am not interested in this product. Please remove me from your list.'
+            );
+        }
+
+        async function testWebhookUnsubscribe() {
+            await sendTestWebhook(
+                'optout@customer.com', 
+                'Re: [GHI789] Unsubscribe',
+                'Please unsubscribe me from all future emails. I do not want to receive any more communications.'
+            );
+        }
+
+        async function sendTestWebhook(fromEmail, subject, body) {
+            const resultDiv = document.getElementById('test-result');
+            resultDiv.innerHTML = '⏳ Sending test webhook...';
+            
+            try {
+                // Simulate Mailgun webhook data
+                const webhookData = new URLSearchParams({
+                    'From': fromEmail,
+                    'To': 'hello@yourcompany.com',
+                    'Subject': subject,
+                    'body-plain': body,
+                    'stripped-text': body,
+                    'Message-Id': `<test-${Date.now()}@mg.yourcompany.com>`,
+                    'timestamp': Math.floor(Date.now() / 1000).toString(),
+                    'token': 'test-token-' + Math.random().toString(36),
+                    'signature': 'test-signature'
+                });
+
+                const response = await fetch('/webhooks/mailgun', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: webhookData
+                });
+
+                const result = await response.json();
+                
+                resultDiv.className = 'result';
+                resultDiv.innerHTML = `✅ Response (${response.status}):\n${JSON.stringify(result, null, 2)}`;
+                
+                if (result.success) {
+                    resultDiv.innerHTML += `\n\n💬 Reply ID: ${result.replyId}\n📧 Tracking ID: ${result.trackingId || 'Not found'}\n⏰ Timestamp: ${result.timestamp}`;
+                }
+                
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `❌ Error: ${error.message}`;
+            }
+        }
+
+        async function checkRecentReplies() {
+            const resultDiv = document.getElementById('recent-replies');
+            resultDiv.innerHTML = '⏳ Checking recent replies...';
+            
+            try {
+                // This would connect to your Zilliz database to show recent replies
+                // For now, show a placeholder
+                resultDiv.className = 'result';
+                resultDiv.innerHTML = `📊 Recent Replies Feature Coming Soon!
+                
+This will show:
+• Recent reply sentiment analysis
+• Intent classification results  
+• Reply-to-email linking
+• AI analysis insights
+
+Currently testing webhook delivery...`;
+                
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `❌ Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>
