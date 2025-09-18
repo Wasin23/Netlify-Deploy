@@ -76,8 +76,10 @@ export async function handler(event, context) {
     const body = new URLSearchParams(event.body);
     const formData = Object.fromEntries(body);
     
-    console.log('[NETLIFY WEBHOOK] Parsed form data keys:', Object.keys(formData));
-    console.log('[NETLIFY WEBHOOK] From:', formData.From || formData.from);
+    console.log('[NETLIFY WEBHOOK] Raw event body:', event.body);
+    console.log('[NETLIFY WEBHOOK] Parsed form data:', formData);
+    console.log('[NETLIFY WEBHOOK] Form data keys:', Object.keys(formData));
+    console.log('[NETLIFY WEBHOOK] From:', formData.From || formData.from || formData.sender);
     console.log('[NETLIFY WEBHOOK] Subject:', formData.Subject || formData.subject);
     
     // Extract email data
