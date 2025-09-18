@@ -253,131 +253,59 @@ function extractTrackingId(formData, subject, body) {
 async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
     console.log('[ZILLIZ] Attempting to store reply...');
-    console.log('[ZILLIZ] Runtime info:', {
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      cwd: process.cwd()
-    });
     
     if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
       console.log('[ZILLIZ] Missing environment variables');
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    // Try different import approaches to debug the issue
-    let MilvusClient;
-    try {
-      console.log('[ZILLIZ] Attempting require approach 1...');
-      const zillizModule = require('@zilliz/milvus2-sdk-node');
-      console.log('[ZILLIZ] Module keys:', Object.keys(zillizModule));
-      MilvusClient = zillizModule.MilvusClient;
-    } catch (err1) {
-      console.log('[ZILLIZ] Approach 1 failed:', err1.message);
-      try {
-        console.log('[ZILLIZ] Attempting require approach 2...');
-        const { MilvusClient: Client } = require('@zilliz/milvus2-sdk-node');
-        MilvusClient = Client;
-      } catch (err2) {
-        console.log('[ZILLIZ] Approach 2 failed:', err2.message);
-        
-        // Fallback: Return a success response with data that can be retrieved by desktop app
-        console.log('[ZILLIZ] Using fallback storage approach');
-        const fallbackData = {
-          id: Date.now().toString(),
-          trackingId: trackingId,
-          content: emailData.body || '',
-          timestamp: new Date().toISOString(),
-          aiResponse: aiResponse,
-          sender: emailData.from,
-          subject: emailData.subject
-        };
-        
-        return { 
-          success: true, 
-          stored: true, 
-          fallback: true,
-          data: fallbackData,
-          message: 'Stored using fallback method - will be available for desktop polling'
-        };
-      }
-    }
+    // Copy EXACT working code from track-pixel function
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
     
-    if (!MilvusClient) {
-      return { success: false, error: 'MilvusClient not found in module', stored: false };
-    }
-    
-    // Create Zilliz client
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN,
+      token: process.env.ZILLIZ_TOKEN
     });
 
-    console.log('[ZILLIZ] Client created successfully');
-
-    // AI analysis
-    const sentiment = analyzeSentiment(emailData.body);
-    const intent = classifyIntent(emailData.body);
+    // Use the SAME collection as tracking events
+    const collectionName = 'email_tracking_events';
     
-    // Prepare reply data for storage with AI response chain
+    // Store reply in the same collection with different event type
     const replyData = {
-      id: emailData.id,
-      tracking_id: trackingId,
-      from_email: emailData.from,
-      subject: emailData.subject,
-      content: emailData.body || 'No content',
-      timestamp: emailData.timestamp,
-      sentiment: sentiment,
-      intent: intent,
-      message_id: emailData.messageId || '',
-      // Store AI response chain
-      ai_response: aiResponse?.response || null,
-      ai_response_sent: aiResponse?.emailSent?.success || false,
-      ai_response_timestamp: aiResponse?.emailSent?.timestamp || null,
-      ai_response_message_id: aiResponse?.emailSent?.messageId || null,
-      // Vector embedding (simplified - in production you'd use actual embeddings)
-      vector: generateSimpleVector(emailData.body || '')
+      email_id: trackingId,
+      event_type: 'ai_reply', 
+      timestamp: new Date().toISOString(),
+      user_agent: 'AI_Response',
+      ip_address: '127.0.0.1',
+      metadata: JSON.stringify({
+        original_message: emailData.body || '',
+        ai_response: aiResponse?.response || '',
+        sender: emailData.from || '',
+        subject: emailData.subject || '',
+        sentiment: aiResponse?.sentiment || 'neutral'
+      }),
+      vector: [Math.random(), Math.random()] // Simple vector
     };
 
-    console.log('[ZILLIZ] Prepared reply data with AI response:', { 
-      id: replyData.id, 
-      sentiment, 
-      intent,
-      hasAiResponse: !!aiResponse?.response,
-      aiResponseSent: replyData.ai_response_sent
-    });
-
-    // Check if replies collection exists, create if not
-    try {
-      await client.describeCollection({ collection_name: 'email_replies_v2' });
-      console.log('[ZILLIZ] Collection exists');
-    } catch (error) {
-      console.log('[ZILLIZ] Creating new collection...');
-      await createRepliesCollection(client);
-    }
-
-    // Insert reply data
-    const insertResult = await client.insert({
-      collection_name: 'email_replies_v2',
+    await client.insert({
+      collection_name: collectionName,
       data: [replyData]
     });
 
-    console.log(`💬 [ZILLIZ] Reply stored successfully: ${sentiment} sentiment, ${intent} intent`);
-    
-    return {
-      success: true,
+    console.log('[ZILLIZ] Reply stored successfully in same collection');
+    return { 
+      success: true, 
       stored: true,
-      sentiment: sentiment,
-      intent: intent,
-      insertResult: insertResult
+      collection: collectionName,
+      data: replyData
     };
-    
+
   } catch (error) {
-    console.error('❌ [ZILLIZ] Failed to store reply:', error);
-    return {
-      success: false,
-      error: error.message,
-      stored: false
+    console.error('[ZILLIZ] Storage error:', error);
+    return { 
+      success: false, 
+      error: error.message, 
+      stored: false 
     };
   }
 }
