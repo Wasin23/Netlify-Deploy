@@ -382,11 +382,12 @@ Message ID: ${trackingId} | Powered by ExaMark AI`;
     params.append('to', toEmail);
     params.append('subject', subject);
     params.append('text', textContent);
-    params.append('html', emailHtml);
+    // Skip HTML for now to test basic sending
+    // params.append('html', emailHtml);
     params.append('o:tag', 'auto-response');
     params.append('o:tag', `tracking-${trackingId}`);
     
-    console.log('[AUTO RESPONSE] Sending email...', { from: fromEmail, to: toEmail, subject });
+    console.log('[AUTO RESPONSE] Sending email...', { from: fromEmail, to: toEmail, subject, bodyLength: textContent.length });
 
     const response = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
       method: 'POST',
