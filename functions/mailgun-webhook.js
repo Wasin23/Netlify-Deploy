@@ -396,7 +396,21 @@ Message ID: ${trackingId} | Powered by ExaMark AI`;
       body: formData
     });
 
-    const result = await response.json();
+    let result;
+    try {
+      const responseText = await response.text();
+      console.log('[AUTO RESPONSE] Raw response:', responseText);
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('[AUTO RESPONSE] Failed to parse response as JSON:', parseError);
+      const responseText = await response.text();
+      return {
+        success: false,
+        sent: false,
+        error: `Invalid response format: ${responseText.substring(0, 100)}`,
+        statusCode: response.status
+      };
+    }
     
     if (response.ok) {
       console.log('✅ [AUTO RESPONSE] Email sent successfully:', result.id);
