@@ -120,6 +120,18 @@ export async function handler(event, context) {
       try {
         aiResponse = await generateAIResponse(emailData);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated');
+        
+        // Automatically send the AI response back to the customer
+        if (aiResponse && aiResponse.success && aiResponse.response) {
+          try {
+            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
+            aiResponse.emailSent = emailSent;
+            console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
+          } catch (emailError) {
+            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
+            aiResponse.emailSent = { success: false, error: emailError.message };
+          }
+        }
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
         aiResponse = { error: error.message };
@@ -147,9 +159,11 @@ export async function handler(event, context) {
         },
         zillizStorage: zillizResult,
         aiResponse: aiResponse,
+        autoEmailSent: aiResponse?.emailSent || null,
         debugInfo: {
           hasZillizCreds: !!(process.env.ZILLIZ_ENDPOINT && process.env.ZILLIZ_TOKEN),
           hasOpenAI: !!process.env.OPENAI_API_KEY,
+          hasMailgun: !!(process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN),
           bodyLength: emailData.body?.length || 0
         }
       })
@@ -170,7 +184,8 @@ export async function handler(event, context) {
         message: error.message,
         debugInfo: {
           hasZillizCreds: !!(process.env.ZILLIZ_ENDPOINT && process.env.ZILLIZ_TOKEN),
-          hasOpenAI: !!process.env.OPENAI_API_KEY
+          hasOpenAI: !!process.env.OPENAI_API_KEY,
+          hasMailgun: !!(process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN)
         }
       })
     };
@@ -296,6 +311,131 @@ async function storeReplyInZilliz(emailData, trackingId) {
       stored: false
     };
   }
+}
+
+// Function to automatically send AI response via Mailgun
+async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
+  try {
+    console.log('[AUTO RESPONSE] Preparing to send response...');
+    
+    if (!process.env.MAILGUN_API_KEY || !process.env.MAILGUN_DOMAIN) {
+      console.log('[AUTO RESPONSE] Missing Mailgun credentials');
+      return { 
+        success: false, 
+        error: 'Missing Mailgun API credentials',
+        sent: false 
+      };
+    }
+
+    const fromEmail = process.env.REPLY_FROM_EMAIL || 'noreply@' + process.env.MAILGUN_DOMAIN;
+    const toEmail = originalEmailData.from;
+    const subject = generateReplySubject(originalEmailData.subject, trackingId);
+    
+    // Prepare the email content with professional formatting
+    const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { border-bottom: 2px solid #667eea; padding-bottom: 20px; margin-bottom: 20px; }
+        .response { background: #f8fafc; padding: 20px; border-left: 4px solid #667eea; margin: 20px 0; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 0.9em; color: #64748b; }
+        .tracking { font-family: monospace; background: #f1f5f9; padding: 5px 10px; border-radius: 4px; font-size: 0.8em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2 style="color: #667eea; margin: 0;">Thank you for your message!</h2>
+        </div>
+        
+        <div class="response">
+            ${aiResponseText.split('\n').map(paragraph => paragraph.trim() ? `<p>${paragraph.trim()}</p>` : '').join('')}
+        </div>
+        
+        <div class="footer">
+            <p><strong>This is an automated response powered by AI.</strong> If you need immediate assistance or have specific questions, please don't hesitate to reach out directly.</p>
+            <p>Best regards,<br>The ExaMark Team</p>
+            <p class="tracking">Message ID: ${trackingId} | Powered by ExaMark AI</p>
+        </div>
+    </div>
+</body>
+</html>`;
+
+    const textContent = `Thank you for your message!
+
+${aiResponseText}
+
+---
+This is an automated response powered by AI. If you need immediate assistance or have specific questions, please don't hesitate to reach out directly.
+
+Best regards,
+The ExaMark Team
+
+Message ID: ${trackingId} | Powered by ExaMark AI`;
+
+    // Send email via Mailgun API
+    const formData = new FormData();
+    formData.append('from', fromEmail);
+    formData.append('to', toEmail);
+    formData.append('subject', subject);
+    formData.append('text', textContent);
+    formData.append('html', emailHtml);
+    formData.append('o:tag', 'auto-response');
+    formData.append('o:tag', `tracking-${trackingId}`);
+    
+    console.log('[AUTO RESPONSE] Sending email...', { from: fromEmail, to: toEmail, subject });
+
+    const response = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${btoa(`api:${process.env.MAILGUN_API_KEY}`)}`,
+      },
+      body: formData
+    });
+
+    const result = await response.json();
+    
+    if (response.ok) {
+      console.log('✅ [AUTO RESPONSE] Email sent successfully:', result.id);
+      return {
+        success: true,
+        sent: true,
+        messageId: result.id,
+        from: fromEmail,
+        to: toEmail,
+        subject: subject,
+        timestamp: new Date().toISOString()
+      };
+    } else {
+      console.error('❌ [AUTO RESPONSE] Failed to send email:', result);
+      return {
+        success: false,
+        sent: false,
+        error: result.message || 'Failed to send email',
+        details: result
+      };
+    }
+    
+  } catch (error) {
+    console.error('❌ [AUTO RESPONSE] Error sending email:', error);
+    return {
+      success: false,
+      sent: false,
+      error: error.message
+    };
+  }
+}
+
+// Function to generate appropriate reply subject
+function generateReplySubject(originalSubject, trackingId) {
+  // Remove existing Re: prefixes
+  let cleanSubject = originalSubject?.replace(/^(Re:\s*)+/i, '') || 'Your message';
+  
+  // Add our reply prefix
+  return `Re: ${cleanSubject}`;
 }
 
 // Function to generate AI response suggestions
