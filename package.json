@@ -1,4 +1,7 @@
 {
   "name": "examark-tracking",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "dependencies": {
+    "@zilliz/milvus2-sdk-node": "^2.4.9"
+  }
 }
