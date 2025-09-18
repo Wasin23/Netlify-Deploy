@@ -5,3 +5,4 @@
     "@zilliz/milvus2-sdk-node": "^2.4.9"
   }
 }
+// Force clean rebuild
