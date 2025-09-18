@@ -303,7 +303,7 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
 
     // Check if replies collection exists, create if not
     try {
-      await client.describeCollection({ collection_name: 'email_replies' });
+      await client.describeCollection({ collection_name: 'email_replies_v2' });
       console.log('[ZILLIZ] Collection exists');
     } catch (error) {
       console.log('[ZILLIZ] Creating new collection...');
@@ -312,7 +312,7 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
 
     // Insert reply data
     const insertResult = await client.insert({
-      collection_name: 'email_replies',
+      collection_name: 'email_replies_v2',
       data: [replyData]
     });
 
@@ -555,7 +555,7 @@ async function getRepliesForTrackingId(trackingId) {
     });
 
     const searchResult = await client.search({
-      collection_name: 'email_replies',
+      collection_name: 'email_replies_v2',
       vector: [],
       filter: `tracking_id == "${trackingId}"`,
       limit: 100,
@@ -583,7 +583,7 @@ async function getRecentReplies(limit = 10) {
     });
 
     const searchResult = await client.search({
-      collection_name: 'email_replies',
+      collection_name: 'email_replies_v2',
       vector: [],
       limit: limit,
       output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent', 'ai_response', 'ai_response_sent', 'ai_response_timestamp', 'ai_response_message_id']
@@ -659,8 +659,8 @@ function generateSimpleVector(text) {
 // Create replies collection in Zilliz
 async function createRepliesCollection(client) {
   const schema = {
-    collection_name: 'email_replies',
-    description: 'Email reply tracking with AI analysis',
+    collection_name: 'email_replies_v2',
+    description: 'Email reply tracking with AI analysis v2',
     fields: [
       {
         name: 'id',
