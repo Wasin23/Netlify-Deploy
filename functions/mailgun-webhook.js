@@ -253,14 +253,40 @@ function extractTrackingId(formData, subject, body) {
 async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
     console.log('[ZILLIZ] Attempting to store reply...');
+    console.log('[ZILLIZ] Runtime info:', {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      cwd: process.cwd()
+    });
     
     if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
       console.log('[ZILLIZ] Missing environment variables');
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    // Import MilvusClient locally like the working track-pixel function
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+    // Try different import approaches to debug the issue
+    let MilvusClient;
+    try {
+      console.log('[ZILLIZ] Attempting require approach 1...');
+      const zillizModule = require('@zilliz/milvus2-sdk-node');
+      console.log('[ZILLIZ] Module keys:', Object.keys(zillizModule));
+      MilvusClient = zillizModule.MilvusClient;
+    } catch (err1) {
+      console.log('[ZILLIZ] Approach 1 failed:', err1.message);
+      try {
+        console.log('[ZILLIZ] Attempting require approach 2...');
+        const { MilvusClient: Client } = require('@zilliz/milvus2-sdk-node');
+        MilvusClient = Client;
+      } catch (err2) {
+        console.log('[ZILLIZ] Approach 2 failed:', err2.message);
+        return { success: false, error: 'MilvusClient import failed: ' + err2.message, stored: false };
+      }
+    }
+    
+    if (!MilvusClient) {
+      return { success: false, error: 'MilvusClient not found in module', stored: false };
+    }
     
     // Create Zilliz client
     const client = new MilvusClient({
