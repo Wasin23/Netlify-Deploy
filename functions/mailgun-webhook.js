@@ -4,8 +4,8 @@ const crypto = require('crypto');
 // Import Zilliz at top level like the working track-pixel function
 let MilvusClient;
 try {
-  const zilliz = require('@zilliz/milvus2-sdk-node');
-  MilvusClient = zilliz.MilvusClient;
+  const { MilvusClient: ImportedClient } = require('@zilliz/milvus2-sdk-node');
+  MilvusClient = ImportedClient;
   console.log('[ZILLIZ] Successfully imported MilvusClient');
 } catch (error) {
   console.error('[ZILLIZ] Failed to import MilvusClient:', error.message);
