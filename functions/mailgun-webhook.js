@@ -564,12 +564,21 @@ async function getRepliesForTrackingId(trackingId) {
       token: process.env.ZILLIZ_TOKEN,
     });
 
+    const collectionName = 'email_tracking_events';
+    
+    // ChatGPT fix 1: Load collection into memory before querying
+    await client.loadCollection({ collection_name: collectionName });
+
+    // ChatGPT fix 2: Use expr instead of filter, with proper escaping
+    function esc(s) { return String(s).replace(/(["\\])/g, '\\$1'); }
+    const expr = `tracking_id == "${esc(trackingId)}" && event_type == "ai_reply"`;
+
     // Query the SAME collection where we store replies (email_tracking_events)
-    // Get ALL data to debug what's actually in the collection
     const queryResult = await client.query({
-      collection_name: 'email_tracking_events',
-      filter: `tracking_id != ""`,  // Get everything that has any tracking_id
+      collection_name: collectionName,
+      expr: expr,  // ChatGPT fix: use expr instead of filter
       limit: 100,
+      consistency_level: 'Strong',  // ChatGPT fix: ensure read-after-write consistency
       output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
 
@@ -613,33 +622,33 @@ async function getRecentReplies(limit = 10) {
       token: process.env.ZILLIZ_TOKEN,
     });
 
+    const collectionName = 'email_tracking_events';
+    
+    // ChatGPT fix: Load collection and use proper query syntax
+    await client.loadCollection({ collection_name: collectionName });
+
     // Use query for filtering recent replies by event type
     const queryResult = await client.query({
-      collection_name: 'email_tracking_events',
-      filter: `event_type == "ai_reply"`,
+      collection_name: collectionName,
+      expr: `event_type == "ai_reply"`,  // Use expr instead of filter
       limit: limit,
-      output_fields: ['email_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'metadata']
+      consistency_level: 'Strong',
+      output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
 
-    // Parse metadata to extract readable response data
-    const replies = queryResult.map(result => {
-      try {
-        const metadata = JSON.parse(result.metadata || '{}');
-        return {
-          tracking_id: result.email_id,
-          timestamp: result.timestamp,
-          original_message: metadata.original_message,
-          ai_response: metadata.ai_response,
-          sender: metadata.sender,
-          subject: metadata.subject,
-          sentiment: metadata.sentiment,
-          reply_id: metadata.reply_id
-        };
-      } catch (e) {
-        console.error('[QUERY] Error parsing metadata:', e);
-        return result;
-      }
-    });
+    // Parse the results using the corrected field structure
+    const replies = queryResult.data?.map(result => {
+      return {
+        tracking_id: result.tracking_id,
+        timestamp: result.timestamp,
+        event_type: result.event_type,
+        user_agent: result.user_agent,
+        sender: result.email_address,
+        recipient: result.recipient,
+        processed: result.processed,
+        ai_response: result.user_agent?.startsWith('AI_Response:') ? result.user_agent.substring(12) : result.user_agent
+      };
+    }) || [];
 
     return replies;
   } catch (error) {
