@@ -2,13 +2,18 @@ const crypto = require('crypto');
 // Use global fetch instead of node-fetch for Netlify compatibility
 
 // Import MilvusClient at top level like working track-pixel.js
-let MilvusClient;
+let MilvusClient = null;
+let milvusImportError = null;
+
 try {
+  console.log('[MILVUS] Attempting to import @zilliz/milvus2-sdk-node...');
   const milvusModule = require('@zilliz/milvus2-sdk-node');
   MilvusClient = milvusModule.MilvusClient;
-  console.log('[MILVUS] Successfully imported MilvusClient at top level');
+  console.log('[MILVUS] Successfully imported MilvusClient at top level:', !!MilvusClient);
 } catch (error) {
+  milvusImportError = error;
   console.error('[MILVUS] Failed to import MilvusClient at top level:', error.message);
+  console.error('[MILVUS] Full import error:', error);
 }
 
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
@@ -259,6 +264,38 @@ function extractTrackingId(formData, subject, body) {
   return null;
 }
 
+// Function to create embeddings from text using OpenAI
+async function createEmbedding(text) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      console.log('[EMBEDDING] No OpenAI API key, using dummy vector');
+      return [0.0, 0.0]; // Fallback dummy vector
+    }
+
+    const response = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        input: text,
+        model: "text-embedding-ada-002"
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.data[0].embedding;
+  } catch (error) {
+    console.error('[EMBEDDING] Error creating embedding:', error.message);
+    return [0.0, 0.0]; // Fallback dummy vector
+  }
+}
+
 // Enhanced function to store reply in Zilliz with better error handling
 async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
@@ -270,10 +307,11 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
     }
 
     if (!MilvusClient) {
-      console.error('[MILVUS] MilvusClient not available, storing fallback');
+      console.error('[MILVUS] MilvusClient not available for storage');
+      console.error('[MILVUS] Import error was:', milvusImportError?.message || 'Unknown import error');
       return { 
         success: false, 
-        error: 'MilvusClient not available', 
+        error: `MilvusClient not available: ${milvusImportError?.message || 'Unknown import error'}`, 
         stored: false 
       };
     }
@@ -285,6 +323,13 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
 
     // Use the SAME collection as tracking events
     const collectionName = 'email_tracking_events';
+    
+    // Create embedding from AI response text for vector search
+    const textToEmbed = `${emailData.subject || ''} ${emailData.body || ''} ${aiResponse?.response || ''}`.trim();
+    console.log('[ZILLIZ] Creating embedding for text:', textToEmbed.substring(0, 100) + '...');
+    
+    const embedding = await createEmbedding(textToEmbed);
+    console.log('[ZILLIZ] Generated embedding vector length:', embedding.length);
     
     // Store reply in the same collection with different event type
     const replyData = {
@@ -298,9 +343,10 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
         ai_response: aiResponse?.response || '',
         sender: emailData.from || '',
         subject: emailData.subject || '',
-        sentiment: aiResponse?.sentiment || 'neutral'
+        sentiment: aiResponse?.sentiment || 'neutral',
+        reply_id: emailData.id || Date.now().toString()
       }),
-      vector: [Math.random(), Math.random()] // Simple vector
+      vector: embedding // Use proper embedding vector
     };
 
     await client.insert({
@@ -549,15 +595,37 @@ async function getRepliesForTrackingId(trackingId) {
     });
 
     // Query the SAME collection where we store replies (email_tracking_events)
-    const searchResult = await client.search({
+    // Use query instead of search for better filtering without vector requirement
+    const queryResult = await client.query({
       collection_name: 'email_tracking_events',
-      vector: [],
       filter: `email_id == "${trackingId}" && event_type == "ai_reply"`,
       limit: 100,
       output_fields: ['email_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'metadata']
     });
 
-    return searchResult.results || [];
+    console.log('[QUERY] Found replies for tracking ID:', trackingId, 'Count:', queryResult.length);
+    
+    // Parse metadata to extract readable response data
+    const replies = queryResult.map(result => {
+      try {
+        const metadata = JSON.parse(result.metadata || '{}');
+        return {
+          tracking_id: result.email_id,
+          timestamp: result.timestamp,
+          original_message: metadata.original_message,
+          ai_response: metadata.ai_response,
+          sender: metadata.sender,
+          subject: metadata.subject,
+          sentiment: metadata.sentiment,
+          reply_id: metadata.reply_id
+        };
+      } catch (e) {
+        console.error('[QUERY] Error parsing metadata:', e);
+        return result;
+      }
+    });
+
+    return replies;
   } catch (error) {
     console.error('[QUERY] Error getting replies:', error);
     return [];
@@ -581,15 +649,35 @@ async function getRecentReplies(limit = 10) {
       token: process.env.ZILLIZ_TOKEN,
     });
 
-    const searchResult = await client.search({
+    // Use query for filtering recent replies by event type
+    const queryResult = await client.query({
       collection_name: 'email_tracking_events',
-      vector: [],
       filter: `event_type == "ai_reply"`,
       limit: limit,
       output_fields: ['email_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'metadata']
     });
 
-    return searchResult.results || [];
+    // Parse metadata to extract readable response data
+    const replies = queryResult.map(result => {
+      try {
+        const metadata = JSON.parse(result.metadata || '{}');
+        return {
+          tracking_id: result.email_id,
+          timestamp: result.timestamp,
+          original_message: metadata.original_message,
+          ai_response: metadata.ai_response,
+          sender: metadata.sender,
+          subject: metadata.subject,
+          sentiment: metadata.sentiment,
+          reply_id: metadata.reply_id
+        };
+      } catch (e) {
+        console.error('[QUERY] Error parsing metadata:', e);
+        return result;
+      }
+    });
+
+    return replies;
   } catch (error) {
     console.error('[QUERY] Error getting recent replies:', error);
     return [];
