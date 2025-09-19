@@ -1,6 +1,9 @@
 const crypto = require('crypto');
 // Use global fetch instead of node-fetch for Netlify compatibility
 
+// TOP-LEVEL IMPORT to prevent Netlify bundler from tree-shaking it out
+const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -131,10 +134,10 @@ exports.handler = async function(event, context) {
         aiResponse = { error: error.message };
       }
 
-      // Skip Zilliz storage for now - just focus on retrieval testing
+      // Store reply in Zilliz with AI response chain (NOW WITH TOP-LEVEL IMPORT!)
       try {
-        console.log('💬 [NETLIFY WEBHOOK] Skipping storage, testing retrieval only');
-        zillizResult = { success: true, stored: false, message: "Storage skipped for testing" };
+        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
+        console.log('💬 [NETLIFY WEBHOOK] Zilliz result with AI response:', zillizResult);
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to store reply in Zilliz:', error);
         zillizResult = { error: error.message, success: false };
@@ -291,20 +294,17 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    // Import INSIDE function like working track-pixel.js - WRAPPED IN TRY-CATCH
-    try {
-      const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
-      
-      const client = new MilvusClient({
-        address: process.env.ZILLIZ_ENDPOINT,
-        token: process.env.ZILLIZ_TOKEN
-      });
+    // Use TOP-LEVEL MilvusClient (no more conditional imports!)
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
 
-      // Use the SAME collection as tracking events
-      const collectionName = 'email_tracking_events';
-      
-      // Create embedding from AI response text for vector search
-      const textToEmbed = `${emailData.subject || ''} ${emailData.body || ''} ${aiResponse?.response || ''}`.trim();
+    // Use the SAME collection as tracking events
+    const collectionName = 'email_tracking_events';
+    
+    // Create embedding from AI response text for vector search
+    const textToEmbed = `${emailData.subject || ''} ${emailData.body || ''} ${aiResponse?.response || ''}`.trim();
       console.log('[ZILLIZ] Creating embedding for text:', textToEmbed.substring(0, 100) + '...');
       
       const embedding = await createEmbedding(textToEmbed);
@@ -340,15 +340,6 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       collection: collectionName,
       data: replyData
     };
-
-    } catch (milvusError) {
-      console.error('[ZILLIZ] MilvusClient error:', milvusError.message);
-      return { 
-        success: false, 
-        error: `MilvusClient error: ${milvusError.message}`, 
-        stored: false 
-      };
-    }
 
   } catch (error) {
     console.error('[ZILLIZ] Storage error:', error);
@@ -572,9 +563,7 @@ async function getRepliesForTrackingId(trackingId) {
       return [];
     }
 
-    // Import INSIDE function like working track-pixel.js
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
-
+    // Use TOP-LEVEL MilvusClient (no conditional imports!)
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
@@ -625,9 +614,7 @@ async function getRecentReplies(limit = 10) {
       return [];
     }
 
-    // Import INSIDE function like working track-pixel.js
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
-
+    // Use TOP-LEVEL MilvusClient (no conditional imports!)
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
