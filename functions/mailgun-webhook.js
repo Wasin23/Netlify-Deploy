@@ -131,10 +131,10 @@ exports.handler = async function(event, context) {
         aiResponse = { error: error.message };
       }
 
-      // Store reply in Zilliz with AI response chain
+      // Skip Zilliz storage for now - just focus on retrieval testing
       try {
-        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
-        console.log('💬 [NETLIFY WEBHOOK] Zilliz result with AI response:', zillizResult);
+        console.log('💬 [NETLIFY WEBHOOK] Skipping storage, testing retrieval only');
+        zillizResult = { success: true, stored: false, message: "Storage skipped for testing" };
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to store reply in Zilliz:', error);
         zillizResult = { error: error.message, success: false };
