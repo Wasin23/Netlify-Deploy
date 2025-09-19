@@ -294,10 +294,10 @@ async function createEmbedding(text) {
 // Enhanced function to store reply in Zilliz with better error handling
 async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
-    console.log('[ZILLIZ] Attempting to store reply...');
+    console.log('[ZILLIZ STORE] Attempting to store reply for tracking ID:', trackingId);
     
     if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
-      console.log('[ZILLIZ] Missing environment variables');
+      console.log('[ZILLIZ STORE] Missing environment variables');
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
@@ -309,13 +309,7 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
 
     // Use the SAME collection as tracking events
     const collectionName = 'email_tracking_events';
-    
-    // Create embedding from AI response text for vector search
-    const textToEmbed = `${emailData.subject || ''} ${emailData.body || ''} ${aiResponse?.response || ''}`.trim();
-      console.log('[ZILLIZ] Creating embedding for text:', textToEmbed.substring(0, 100) + '...');
-      
-      const embedding = await createEmbedding(textToEmbed);
-      console.log('[ZILLIZ] Generated embedding vector length:', embedding.length);
+    console.log('[ZILLIZ STORE] Using collection:', collectionName);
     
     // Store reply using EXACT same schema as working track-pixel
     const replyData = {
@@ -330,12 +324,20 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       dummy_vector: [0.0, 0.0]                      // Match exact field name and dimensions
     };
 
-    await client.insert({
+    console.log('[ZILLIZ STORE] Preparing to insert data:', {
+      tracking_id: replyData.tracking_id,
+      event_type: replyData.event_type,
+      user_agent_length: replyData.user_agent.length
+    });
+
+    const insertResult = await client.insert({
       collection_name: collectionName,
       data: [replyData]
     });
 
-    console.log('[ZILLIZ] Reply stored successfully in same collection');
+    console.log('[ZILLIZ STORE] Insert result:', insertResult);
+    console.log('[ZILLIZ STORE] Reply stored successfully in same collection');
+    
     return { 
       success: true, 
       stored: true,
@@ -344,7 +346,12 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
     };
 
   } catch (error) {
-    console.error('[ZILLIZ] Storage error:', error);
+    console.error('[ZILLIZ STORE] Storage error:', error);
+    console.error('[ZILLIZ STORE] Error details:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack?.substring(0, 500)
+    });
     return { 
       success: false, 
       error: error.message, 
