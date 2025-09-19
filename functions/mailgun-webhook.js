@@ -215,6 +215,7 @@ function extractTrackingId(formData, subject, body) {
   if (recipient) {
     const emailMatch = recipient.match(/tracking-(\w+)@/);
     if (emailMatch) {
+      console.log('[EXTRACT] Found tracking ID in recipient:', emailMatch[1]);
       return emailMatch[1];
     }
   }
@@ -222,30 +223,36 @@ function extractTrackingId(formData, subject, body) {
   // Method 2: Look for tracking ID in subject line
   const subjectMatch = subject?.match(/\[(\w+)\]/);
   if (subjectMatch) {
+    console.log('[EXTRACT] Found tracking ID in subject:', subjectMatch[1]);
     return subjectMatch[1];
   }
   
   // Method 3: Look for tracking ID in body text
   const bodyMatch = body?.match(/tracking[_\s]*id[:\s]*(\w+)/i);
   if (bodyMatch) {
+    console.log('[EXTRACT] Found tracking ID in body:', bodyMatch[1]);
     return bodyMatch[1];
   }
   
-  // Method 4: Look in In-Reply-To header for message ID patterns
+  // Method 4: Look in In-Reply-To header for tracking-ID pattern (FIXED)
   const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
   if (inReplyTo) {
-    const headerMatch = inReplyTo.match(/(\w{8,})/);
-    if (headerMatch) {
-      return headerMatch[1];
+    console.log('[EXTRACT] Checking In-Reply-To header:', inReplyTo);
+    const trackingMatch = inReplyTo.match(/tracking-([a-f0-9]{32})/i);
+    if (trackingMatch) {
+      console.log('[EXTRACT] Found tracking ID in In-Reply-To:', trackingMatch[1]);
+      return trackingMatch[1];
     }
   }
   
-  // Method 5: Look in References header
+  // Method 5: Look in References header for tracking-ID pattern (FIXED)
   const references = formData.References || formData.references;
   if (references) {
-    const refMatch = references.match(/(\w{8,})/);
-    if (refMatch) {
-      return refMatch[1];
+    console.log('[EXTRACT] Checking References header:', references);
+    const trackingMatch = references.match(/tracking-([a-f0-9]{32})/i);
+    if (trackingMatch) {
+      console.log('[EXTRACT] Found tracking ID in References:', trackingMatch[1]);
+      return trackingMatch[1];
     }
   }
   
