@@ -1,21 +1,6 @@
 const crypto = require('crypto');
 // Use global fetch instead of node-fetch for Netlify compatibility
 
-// Import MilvusClient at top level like working track-pixel.js
-let MilvusClient = null;
-let milvusImportError = null;
-
-try {
-  console.log('[MILVUS] Attempting to import @zilliz/milvus2-sdk-node...');
-  const milvusModule = require('@zilliz/milvus2-sdk-node');
-  MilvusClient = milvusModule.MilvusClient;
-  console.log('[MILVUS] Successfully imported MilvusClient at top level:', !!MilvusClient);
-} catch (error) {
-  milvusImportError = error;
-  console.error('[MILVUS] Failed to import MilvusClient at top level:', error.message);
-  console.error('[MILVUS] Full import error:', error);
-}
-
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -306,15 +291,8 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    if (!MilvusClient) {
-      console.error('[MILVUS] MilvusClient not available for storage');
-      console.error('[MILVUS] Import error was:', milvusImportError?.message || 'Unknown import error');
-      return { 
-        success: false, 
-        error: `MilvusClient not available: ${milvusImportError?.message || 'Unknown import error'}`, 
-        stored: false 
-      };
-    }
+    // Import INSIDE function like working track-pixel.js
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
@@ -584,10 +562,8 @@ async function getRepliesForTrackingId(trackingId) {
       return [];
     }
 
-    if (!MilvusClient) {
-      console.error('[MILVUS] MilvusClient not available for getRepliesForTrackingId');
-      return [];
-    }
+    // Import INSIDE function like working track-pixel.js
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
@@ -639,10 +615,8 @@ async function getRecentReplies(limit = 10) {
       return [];
     }
 
-    if (!MilvusClient) {
-      console.error('[MILVUS] MilvusClient not available for getRecentReplies');
-      return [];
-    }
+    // Import INSIDE function like working track-pixel.js
+    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
