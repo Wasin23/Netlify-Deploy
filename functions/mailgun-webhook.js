@@ -271,8 +271,11 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
 
     if (!MilvusClient) {
       console.error('[MILVUS] MilvusClient not available, storing fallback');
-      // Store in fallback location - could be local file or different service
-      return;
+      return { 
+        success: false, 
+        error: 'MilvusClient not available', 
+        stored: false 
+      };
     }
 
     const client = new MilvusClient({
@@ -545,12 +548,13 @@ async function getRepliesForTrackingId(trackingId) {
       token: process.env.ZILLIZ_TOKEN,
     });
 
+    // Query the SAME collection where we store replies (email_tracking_events)
     const searchResult = await client.search({
-      collection_name: 'email_replies_v2',
+      collection_name: 'email_tracking_events',
       vector: [],
-      filter: `tracking_id == "${trackingId}"`,
+      filter: `email_id == "${trackingId}" && event_type == "ai_reply"`,
       limit: 100,
-      output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent', 'ai_response', 'ai_response_sent', 'ai_response_timestamp', 'ai_response_message_id']
+      output_fields: ['email_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'metadata']
     });
 
     return searchResult.results || [];
@@ -578,10 +582,11 @@ async function getRecentReplies(limit = 10) {
     });
 
     const searchResult = await client.search({
-      collection_name: 'email_replies_v2',
+      collection_name: 'email_tracking_events',
       vector: [],
+      filter: `event_type == "ai_reply"`,
       limit: limit,
-      output_fields: ['id', 'tracking_id', 'from_email', 'subject', 'content', 'timestamp', 'sentiment', 'intent', 'ai_response', 'ai_response_sent', 'ai_response_timestamp', 'ai_response_message_id']
+      output_fields: ['email_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'metadata']
     });
 
     return searchResult.results || [];
