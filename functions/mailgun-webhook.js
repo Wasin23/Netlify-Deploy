@@ -291,23 +291,24 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    // Import INSIDE function like working track-pixel.js
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+    // Import INSIDE function like working track-pixel.js - WRAPPED IN TRY-CATCH
+    try {
+      const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+      
+      const client = new MilvusClient({
+        address: process.env.ZILLIZ_ENDPOINT,
+        token: process.env.ZILLIZ_TOKEN
+      });
 
-    const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN
-    });
-
-    // Use the SAME collection as tracking events
-    const collectionName = 'email_tracking_events';
-    
-    // Create embedding from AI response text for vector search
-    const textToEmbed = `${emailData.subject || ''} ${emailData.body || ''} ${aiResponse?.response || ''}`.trim();
-    console.log('[ZILLIZ] Creating embedding for text:', textToEmbed.substring(0, 100) + '...');
-    
-    const embedding = await createEmbedding(textToEmbed);
-    console.log('[ZILLIZ] Generated embedding vector length:', embedding.length);
+      // Use the SAME collection as tracking events
+      const collectionName = 'email_tracking_events';
+      
+      // Create embedding from AI response text for vector search
+      const textToEmbed = `${emailData.subject || ''} ${emailData.body || ''} ${aiResponse?.response || ''}`.trim();
+      console.log('[ZILLIZ] Creating embedding for text:', textToEmbed.substring(0, 100) + '...');
+      
+      const embedding = await createEmbedding(textToEmbed);
+      console.log('[ZILLIZ] Generated embedding vector length:', embedding.length);
     
     // Store reply in the same collection with different event type
     const replyData = {
@@ -339,6 +340,15 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       collection: collectionName,
       data: replyData
     };
+
+    } catch (milvusError) {
+      console.error('[ZILLIZ] MilvusClient error:', milvusError.message);
+      return { 
+        success: false, 
+        error: `MilvusClient error: ${milvusError.message}`, 
+        stored: false 
+      };
+    }
 
   } catch (error) {
     console.error('[ZILLIZ] Storage error:', error);
