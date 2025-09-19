@@ -565,10 +565,10 @@ async function getRepliesForTrackingId(trackingId) {
     });
 
     // Query the SAME collection where we store replies (email_tracking_events)
-    // Temporarily remove filter to test if we can get any data
+    // Get ALL data to debug what's actually in the collection
     const queryResult = await client.query({
       collection_name: 'email_tracking_events',
-      filter: `event_type == "ai_reply"`,  // Just filter by event type
+      filter: `tracking_id != ""`,  // Get everything that has any tracking_id
       limit: 100,
       output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
