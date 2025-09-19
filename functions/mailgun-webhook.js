@@ -568,31 +568,24 @@ async function getRepliesForTrackingId(trackingId) {
     // Use query instead of search for better filtering without vector requirement
     const queryResult = await client.query({
       collection_name: 'email_tracking_events',
-      filter: `email_id == "${trackingId}" && event_type == "ai_reply"`,
+      filter: `tracking_id == "${trackingId}" && event_type == "ai_reply"`,
       limit: 100,
-      output_fields: ['email_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'metadata']
+      output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
 
     console.log('[QUERY] Found replies for tracking ID:', trackingId, 'Count:', queryResult.length);
     
-    // Parse metadata to extract readable response data
+    // Since we stored AI data in existing fields, extract it from there
     const replies = queryResult.map(result => {
-      try {
-        const metadata = JSON.parse(result.metadata || '{}');
-        return {
-          tracking_id: result.email_id,
-          timestamp: result.timestamp,
-          original_message: metadata.original_message,
-          ai_response: metadata.ai_response,
-          sender: metadata.sender,
-          subject: metadata.subject,
-          sentiment: metadata.sentiment,
-          reply_id: metadata.reply_id
-        };
-      } catch (e) {
-        console.error('[QUERY] Error parsing metadata:', e);
-        return result;
-      }
+      return {
+        tracking_id: result.tracking_id,
+        timestamp: result.timestamp,
+        event_type: result.event_type,
+        user_agent: result.user_agent,
+        sender: result.email_address,
+        recipient: result.recipient,
+        processed: result.processed
+      };
     });
 
     return replies;
