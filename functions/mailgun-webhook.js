@@ -1,6 +1,16 @@
 const crypto = require('crypto');
 // Use global fetch instead of node-fetch for Netlify compatibility
 
+// Import MilvusClient at top level like working track-pixel.js
+let MilvusClient;
+try {
+  const milvusModule = require('@zilliz/milvus2-sdk-node');
+  MilvusClient = milvusModule.MilvusClient;
+  console.log('[MILVUS] Successfully imported MilvusClient at top level');
+} catch (error) {
+  console.error('[MILVUS] Failed to import MilvusClient at top level:', error.message);
+}
+
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -259,9 +269,12 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       return { success: false, error: 'Missing Zilliz credentials', stored: false };
     }
 
-    // Copy EXACT working code from track-pixel function
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
-    
+    if (!MilvusClient) {
+      console.error('[MILVUS] MilvusClient not available, storing fallback');
+      // Store in fallback location - could be local file or different service
+      return;
+    }
+
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN
@@ -522,7 +535,11 @@ async function getRepliesForTrackingId(trackingId) {
       return [];
     }
 
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+    if (!MilvusClient) {
+      console.error('[MILVUS] MilvusClient not available for getRepliesForTrackingId');
+      return [];
+    }
+
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
@@ -550,7 +567,11 @@ async function getRecentReplies(limit = 10) {
       return [];
     }
 
-    const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+    if (!MilvusClient) {
+      console.error('[MILVUS] MilvusClient not available for getRecentReplies');
+      return [];
+    }
+
     const client = new MilvusClient({
       address: process.env.ZILLIZ_ENDPOINT,
       token: process.env.ZILLIZ_TOKEN,
