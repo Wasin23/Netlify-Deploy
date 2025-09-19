@@ -577,11 +577,16 @@ async function getRepliesForTrackingId(trackingId) {
     
     // Since we stored AI data in existing fields, extract it from there
     const replies = queryResult.map(result => {
+      // Extract AI response from user_agent field (where we stored it)
+      const aiResponseText = result.user_agent || '';
+      const aiResponse = aiResponseText.startsWith('AI_Response: ') ? 
+        aiResponseText.substring(13) : aiResponseText; // Remove "AI_Response: " prefix
+      
       return {
         tracking_id: result.tracking_id,
         timestamp: result.timestamp,
         event_type: result.event_type,
-        user_agent: result.user_agent,
+        ai_response: aiResponse,
         sender: result.email_address,
         recipient: result.recipient,
         processed: result.processed
