@@ -330,12 +330,32 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       user_agent_length: replyData.user_agent.length
     });
 
+    // Load collection first to ensure it's ready
+    console.log('[ZILLIZ STORE] Loading collection...');
+    try {
+      const loadResult = await client.loadCollection({ collection_name: collectionName });
+      console.log('[ZILLIZ STORE] Collection loaded:', loadResult);
+    } catch (loadError) {
+      console.error('[ZILLIZ STORE] Failed to load collection:', loadError);
+    }
+
+    console.log('[ZILLIZ STORE] Attempting insert...');
     const insertResult = await client.insert({
       collection_name: collectionName,
       data: [replyData]
     });
 
     console.log('[ZILLIZ STORE] Insert result:', insertResult);
+    
+    // Force a flush to ensure data is persisted
+    console.log('[ZILLIZ STORE] Flushing data...');
+    try {
+      const flushResult = await client.flush({ collection_names: [collectionName] });
+      console.log('[ZILLIZ STORE] Flush result:', flushResult);
+    } catch (flushError) {
+      console.error('[ZILLIZ STORE] Flush error (not critical):', flushError);
+    }
+    
     console.log('[ZILLIZ STORE] Reply stored successfully in same collection');
     
     return { 
