@@ -6,6 +6,10 @@
 [build.environment]
   NODE_VERSION = "18.18.2"
 
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["@zilliz/milvus2-sdk-node"]
+
 [[redirects]]
   from = "/track/pixel/:id"
   to = "/.netlify/functions/track-pixel/:id"
