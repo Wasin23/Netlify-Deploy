@@ -565,10 +565,10 @@ async function getRepliesForTrackingId(trackingId) {
     });
 
     // Query the SAME collection where we store replies (email_tracking_events)
-    // Use query instead of search for better filtering without vector requirement
+    // Temporarily remove filter to test if we can get any data
     const queryResult = await client.query({
       collection_name: 'email_tracking_events',
-      filter: `tracking_id == "${trackingId}" && event_type == "ai_reply"`,
+      filter: `event_type == "ai_reply"`,  // Just filter by event type
       limit: 100,
       output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
