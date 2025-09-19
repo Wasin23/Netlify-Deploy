@@ -310,22 +310,17 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       const embedding = await createEmbedding(textToEmbed);
       console.log('[ZILLIZ] Generated embedding vector length:', embedding.length);
     
-    // Store reply in the same collection with different event type
+    // Store reply using EXACT same schema as working track-pixel
     const replyData = {
-      email_id: trackingId,
+      tracking_id: trackingId,        // Match exact field name
       event_type: 'ai_reply', 
       timestamp: new Date().toISOString(),
-      user_agent: 'AI_Response',
+      user_agent: `AI_Response: ${aiResponse?.response?.substring(0, 50) || 'Generated'}...`,
       ip_address: '127.0.0.1',
-      metadata: JSON.stringify({
-        original_message: emailData.body || '',
-        ai_response: aiResponse?.response || '',
-        sender: emailData.from || '',
-        subject: emailData.subject || '',
-        sentiment: aiResponse?.sentiment || 'neutral',
-        reply_id: emailData.id || Date.now().toString()
-      }),
-      vector: embedding // Use proper embedding vector
+      email_address: emailData.from || 'Unknown',    // Match track-pixel schema
+      recipient: emailData.to || 'Unknown',          // Match track-pixel schema  
+      processed: false,                              // Match track-pixel schema
+      dummy_vector: [0.0, 0.0]                      // Match exact field name and dimensions
     };
 
     await client.insert({
