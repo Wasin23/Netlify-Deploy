@@ -566,30 +566,50 @@ async function getRepliesForTrackingId(trackingId) {
 
     const collectionName = 'email_tracking_events';
     
+    // ChatGPT debugging: Check if tracking_id is a declared schema field
+    console.log('[DEBUG] Checking collection schema...');
+    const info = await client.describeCollection({ collection_name: collectionName });
+    const fields = info.schema?.fields || info.fields || [];
+    console.log('[DEBUG] FIELDS:', fields.map(f => ({
+      name: f.name,
+      data_type: f.data_type,
+      is_primary_key: f.is_primary_key,
+      max_length: f.type_params?.max_length,
+      dim: f.type_params?.dim,
+    })));
+
     // ChatGPT fix 1: Load collection into memory before querying
     await client.loadCollection({ collection_name: collectionName });
 
-    // ChatGPT fix 2: Use expr instead of filter, with proper escaping
-    function esc(s) { return String(s).replace(/(["\\])/g, '\\$1'); }
-    const expr = `tracking_id == "${esc(trackingId)}" && event_type == "ai_reply"`;
+    // ChatGPT fix 2: Use schema fields only + client-side refine
+    // Filter server-side by declared fields, then client-side filter by tracking_id
+    const expr = `event_type == "ai_reply"`;  // Only use declared schema field
 
     // Query the SAME collection where we store replies (email_tracking_events)
     const queryResult = await client.query({
       collection_name: collectionName,
-      expr: expr,  // ChatGPT fix: use expr instead of filter
-      limit: 100,
+      expr: expr,  // ChatGPT fix: only filter by declared schema fields
+      limit: 1000,  // Increased limit since we'll filter client-side
       consistency_level: 'Strong',  // ChatGPT fix: ensure read-after-write consistency
       output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
 
-    console.log('[QUERY] Found replies for tracking ID:', trackingId, 'Count:', queryResult.length);
+    // Client-side filter by tracking_id (since it might be dynamic field)
+    const allReplies = queryResult.data || queryResult || [];
+    const filteredReplies = allReplies.filter(r => String(r.tracking_id).trim() === trackingId);
+    
+    console.log('[QUERY] Total ai_reply events:', allReplies.length);
+    console.log('[QUERY] Filtered by tracking ID:', trackingId, 'Count:', filteredReplies.length);
     
     // Since we stored AI data in existing fields, extract it from there
-    const replies = queryResult.map(result => {
+    const replies = filteredReplies.map(result => {
       // Extract AI response from user_agent field (where we stored it)
       const aiResponseText = result.user_agent || '';
       const aiResponse = aiResponseText.startsWith('AI_Response: ') ? 
         aiResponseText.substring(13) : aiResponseText; // Remove "AI_Response: " prefix
+      
+      // Debug: log the actual tracking_id value and length
+      console.log('[DEBUG] Raw tracking_id:', JSON.stringify(result.tracking_id), 'Length:', result.tracking_id?.length);
       
       return {
         tracking_id: result.tracking_id,
