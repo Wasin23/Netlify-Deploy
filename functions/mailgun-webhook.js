@@ -322,7 +322,7 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
       tracking_id: trackingId,        // Match exact field name
       event_type: 'ai_reply', 
       timestamp: new Date().toISOString(),
-      user_agent: `AI_Response: ${aiResponse?.response?.substring(0, 50) || 'Generated'}...`,
+      user_agent: `AI_Response: ${aiResponse?.response || 'Generated'}`,  // Store full response
       ip_address: '127.0.0.1',
       email_address: emailData.from || 'Unknown',    // Match track-pixel schema
       recipient: emailData.to || 'Unknown',          // Match track-pixel schema  
