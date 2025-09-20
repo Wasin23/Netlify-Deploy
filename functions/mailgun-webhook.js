@@ -517,13 +517,66 @@ function generateReplySubject(originalSubject, trackingId) {
 }
 
 // Function to generate AI response suggestions
+// Enhanced AI Response Generation with Smart Intent Classification
 async function generateAIResponse(emailData) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return generateRuleBasedResponse(emailData);
     }
 
-    // Use OpenAI API to generate smart responses
+    console.log('🤖 [SMART AI] Generating enhanced AI response...');
+    
+    // Step 1: Classify intent using OpenAI
+    const intent = await classifyIntentWithAI(emailData.body);
+    console.log('🎯 [SMART AI] Intent classified:', intent);
+    
+    // Step 2: Analyze sentiment
+    const sentiment = await analyzeSentimentWithAI(emailData.body);
+    console.log('💭 [SMART AI] Sentiment analyzed:', sentiment);
+    
+    // Step 3: Generate context-aware response
+    const response = await generateContextAwareResponse(emailData, intent, sentiment);
+    
+    return {
+      success: true,
+      response: response,
+      provider: 'Smart AI Responder',
+      analysis: { intent, sentiment }
+    };
+
+  } catch (error) {
+    console.error('❌ [SMART AI] Error:', error);
+    return generateRuleBasedResponse(emailData);
+  }
+}
+
+// Smart Intent Classification using OpenAI
+async function classifyIntentWithAI(emailContent) {
+  const prompt = `
+Analyze this email reply and classify the sender's intent. Consider the context of a B2B sales conversation.
+
+Email content: "${emailContent}"
+
+Classify the intent as ONE of these categories:
+- meeting_request_positive: Wants to schedule a meeting/call
+- meeting_request_negative: Declines meeting but still engaged  
+- meeting_time_preference: Specifying preferred times/dates
+- calendar_booking_request: Asking for calendar link
+- technical_question: Asking how product/service works
+- pricing_question: Asking about costs, rates, pricing
+- timeline_question: Asking about implementation timeline
+- case_study_request: Wants examples, references, case studies
+- integration_question: How it works with existing systems
+- compliance_question: Security, SOC2, GDPR concerns
+- comparison_question: Comparing to competitors
+- question_about_product: General product questions
+- unsubscribe_request: Wants to opt out
+- general_positive: Shows interest but no specific action
+- general_negative: Polite rejection or not interested
+
+Respond with just the intent category, nothing else.`;
+
+  try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -531,44 +584,223 @@ async function generateAIResponse(emailData) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a professional business email assistant. Generate appropriate, helpful responses to customer emails. Keep responses professional, concise, and actionable. Always be positive and helpful.'
-          },
-          {
-            role: 'user',
-            content: `Generate a professional response to this customer email:
-
-From: ${emailData.from}
-Subject: ${emailData.subject}
-Message: ${emailData.body}
-
-Please suggest an appropriate response that addresses their needs.`
-          }
-        ],
-        max_tokens: 300,
-        temperature: 0.7
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 50
       })
     });
 
-    const aiResult = await response.json();
-    
-    if (aiResult.choices && aiResult.choices[0]) {
-      return {
-        success: true,
-        response: aiResult.choices[0].message.content.trim(),
-        provider: 'OpenAI GPT-3.5'
-      };
-    } else {
-      throw new Error('No AI response generated');
-    }
+    const data = await response.json();
+    return data.choices[0].message.content.trim().toLowerCase();
 
   } catch (error) {
-    console.error('[AI RESPONSE] Error:', error);
-    return generateRuleBasedResponse(emailData);
+    console.error('❌ [INTENT] Classification failed:', error);
+    return fallbackIntentClassification(emailContent);
   }
+}
+
+// Sentiment Analysis using OpenAI
+async function analyzeSentimentWithAI(emailContent) {
+  const prompt = `
+Analyze the sentiment of this email reply in a B2B sales context:
+
+"${emailContent}"
+
+Classify as one of: positive, negative, neutral, frustrated, excited, interested, skeptical
+
+Respond with just the sentiment word, nothing else.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 20
+      })
+    });
+
+    const data = await response.json();
+    return data.choices[0].message.content.trim().toLowerCase();
+
+  } catch (error) {
+    console.error('❌ [SENTIMENT] Analysis failed:', error);
+    return 'neutral';
+  }
+}
+
+// Context-Aware Response Generation
+async function generateContextAwareResponse(emailData, intent, sentiment) {
+  // Get default settings (will be replaced with Zilliz storage later)
+  const settings = getDefaultResponseSettings();
+  
+  // Build context for AI prompt
+  const contextPrompt = `
+You are a professional sales AI assistant responding to a B2B email reply.
+
+COMPANY INFO:
+- Company: ${settings.company_info.name}
+- Product: ${settings.company_info.product_name}
+- Key Benefits: ${settings.company_info.value_props.join(', ')}
+- Calendar Link: ${settings.company_info.calendar_link}
+
+ORIGINAL EMAIL CONTEXT:
+- From: ${emailData.from}
+- Subject: ${emailData.subject}
+- Their Reply: "${emailData.body}"
+
+ANALYSIS:
+- Intent: ${intent}
+- Sentiment: ${sentiment}
+
+RESPONSE STYLE:
+- Tone: ${settings.response_style.tone}
+- Meeting Approach: ${settings.response_style.meeting_pushiness}
+
+Generate a personalized response based on their intent. Guidelines:
+${getResponseGuidelines(intent, settings)}
+
+Keep it professional, helpful, and personalized. Include calendar link if appropriate for meeting-related intents.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: contextPrompt }],
+        temperature: 0.7,
+        max_tokens: 400
+      })
+    });
+
+    const data = await response.json();
+    return data.choices[0].message.content.trim();
+
+  } catch (error) {
+    console.error('❌ [CONTEXT RESPONSE] Generation failed:', error);
+    return generateTemplateResponse(intent, sentiment, settings);
+  }
+}
+
+// Default response settings (temporary - will move to Zilliz)
+function getDefaultResponseSettings() {
+  return {
+    company_info: {
+      name: "Exabits",
+      product_name: "AI GPU Compute Solutions",
+      value_props: [
+        "30% cost reduction compared to general cloud services",
+        "40% faster model training with optimized infrastructure", 
+        "Custom AI infrastructure tailored to your needs"
+      ],
+      calendar_link: "https://calendly.com/yourname/meeting"
+    },
+    response_style: {
+      tone: "professional_friendly",
+      meeting_pushiness: "soft",
+      technical_depth: "medium"
+    }
+  };
+}
+
+// Response guidelines based on intent
+function getResponseGuidelines(intent, settings) {
+  const guidelines = {
+    meeting_request_positive: "Express enthusiasm, offer specific times, include calendar link prominently",
+    technical_question: "Provide helpful technical info, relate to their use case, soft meeting suggestion",
+    pricing_question: "Address cost concerns professionally, emphasize value, offer detailed discussion",
+    calendar_booking_request: "Immediately provide calendar link with enthusiasm",
+    meeting_time_preference: "Accommodate their preference, confirm scheduling details",
+    case_study_request: "Offer relevant examples, suggest detailed discussion to share more",
+    unsubscribe_request: "Respect their wishes professionally, ask for feedback",
+    general_positive: "Maintain momentum, offer next steps or resources",
+    general_negative: "Respectful, leave door open for future, thank them for honesty"
+  };
+  
+  return guidelines[intent] || "Provide helpful, professional response addressing their needs";
+}
+
+// Template-based response (fallback)
+function generateTemplateResponse(intent, sentiment, settings) {
+  const templates = {
+    meeting_request_positive: `That's fantastic! I'm excited to discuss how ${settings.company_info.value_props[0]} could benefit your organization.\n\nWould you like to schedule a brief call to explore this further? ${settings.company_info.calendar_link}\n\nLooking forward to our conversation!`,
+    
+    technical_question: `Great question! Our ${settings.company_info.product_name} is designed to address exactly these kinds of technical challenges.\n\n${settings.company_info.value_props[1]} - this could be particularly relevant for your use case.\n\nWould you like to discuss the technical details in more depth? Happy to answer any specific questions you might have.`,
+    
+    pricing_question: `I appreciate your interest in understanding the investment. ${settings.company_info.value_props[0]} - most clients see significant ROI within the first few months.\n\nI'd be happy to discuss specific pricing based on your requirements. Would you like to schedule a brief call to go over the details? ${settings.company_info.calendar_link}`,
+    
+    calendar_booking_request: `Absolutely! I'd love to connect with you.\n\nHere's my calendar link: ${settings.company_info.calendar_link}\n\nFeel free to pick a time that works best for you. Looking forward to our conversation!`,
+    
+    general_positive: `Thank you for your interest! I'm glad this resonates with you.\n\n${settings.company_info.value_props[2]} - this could be a great fit for your organization.\n\nWould you like to explore this further? Happy to answer any questions or schedule a brief discussion.`
+  };
+  
+  return templates[intent] || "Thank you for your message! I appreciate you taking the time to reach out. How can I best help you with your questions or next steps?";
+}
+
+// Fallback intent classification using keyword matching
+function fallbackIntentClassification(emailContent) {
+  const lowerText = emailContent.toLowerCase();
+  
+  // Meeting-related intents
+  if (lowerText.match(/yes.*meeting|schedule.*call|let.*schedule|sounds good.*meeting|interested.*call/)) {
+    return 'meeting_request_positive';
+  }
+  if (lowerText.match(/calendar.*link|booking.*link|schedule.*link|send.*calendar/)) {
+    return 'calendar_booking_request';
+  }
+  if (lowerText.match(/tuesday|wednesday|thursday|friday|monday|morning|afternoon|time.*work/)) {
+    return 'meeting_time_preference';
+  }
+  
+  // Question types
+  if (lowerText.match(/how.*work|technical|integration|api|system|architecture/)) {
+    return 'technical_question';
+  }
+  if (lowerText.match(/price|cost|rate|budget|expensive|affordable|pricing/)) {
+    return 'pricing_question';
+  }
+  if (lowerText.match(/how long|timeline|when.*ready|implementation.*time/)) {
+    return 'timeline_question';
+  }
+  if (lowerText.match(/example|case study|reference|similar.*company|who.*using/)) {
+    return 'case_study_request';
+  }
+  if (lowerText.match(/security|compliance|soc2|gdpr|data.*protection/)) {
+    return 'compliance_question';
+  }
+  if (lowerText.match(/vs|versus|compared.*to|better.*than|competitor/)) {
+    return 'comparison_question';
+  }
+  
+  // Negative responses
+  if (lowerText.match(/unsubscribe|remove.*list|stop.*email|opt.*out/)) {
+    return 'unsubscribe_request';
+  }
+  if (lowerText.match(/not.*interested|no.*thank|pass.*this.*time|not.*right.*now/)) {
+    return 'general_negative';
+  }
+  
+  // Positive but general
+  if (lowerText.match(/interesting|good.*know|thanks.*info|appreciate/)) {
+    return 'general_positive';
+  }
+  
+  // Default for questions
+  if (lowerText.includes('?') || lowerText.match(/what|how|when|where|why|can.*you/)) {
+    return 'question_about_product';
+  }
+  
+  return 'general_positive';
 }
 
 // Fallback rule-based response generation
