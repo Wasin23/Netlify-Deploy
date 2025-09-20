@@ -134,12 +134,17 @@ exports.handler = async function(event, context) {
         aiResponse = { error: error.message };
       }
 
-      // Store reply in Zilliz with AI response chain (NOW WITH TOP-LEVEL IMPORT!)
+      // Store lead message first, then AI response
       try {
+        // Store the lead's original message
+        const leadMessageResult = await storeLeadMessage(emailData, trackingId);
+        console.log('💬 [NETLIFY WEBHOOK] Lead message stored:', leadMessageResult);
+        
+        // Store AI response
         zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
-        console.log('💬 [NETLIFY WEBHOOK] Zilliz result with AI response:', zillizResult);
+        console.log('💬 [NETLIFY WEBHOOK] AI response stored:', zillizResult);
       } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to store reply in Zilliz:', error);
+        console.error('❌ [NETLIFY WEBHOOK] Failed to store conversation in Zilliz:', error);
         zillizResult = { error: error.message, success: false };
       }
     } else {
@@ -615,48 +620,88 @@ async function getRepliesForTrackingId(trackingId) {
     // ChatGPT fix 1: Load collection into memory before querying
     await client.loadCollection({ collection_name: collectionName });
 
-    // ChatGPT fix 2: Use schema fields only + client-side refine
-    // Filter server-side by declared fields, then client-side filter by tracking_id
-    const expr = `event_type == "ai_reply"`;  // Only use declared schema field
+    // Get both lead messages and AI replies for full conversation
+    const expr = `event_type == "ai_reply" || event_type == "lead_message"`;
 
-    // Query the SAME collection where we store replies (email_tracking_events)
+    // Query the SAME collection where we store conversation data
     const queryResult = await client.query({
       collection_name: collectionName,
-      expr: expr,  // ChatGPT fix: only filter by declared schema fields
+      expr: expr,
       limit: 1000,  // Increased limit since we'll filter client-side
-      consistency_level: 'Strong',  // ChatGPT fix: ensure read-after-write consistency
+      consistency_level: 'Strong',
       output_fields: ['tracking_id', 'event_type', 'timestamp', 'user_agent', 'ip_address', 'email_address', 'recipient', 'processed']
     });
 
-    // Client-side filter by tracking_id (since it might be dynamic field)
-    const allReplies = queryResult.data || queryResult || [];
-    const filteredReplies = allReplies.filter(r => String(r.tracking_id).trim() === trackingId);
+    // Client-side filter by tracking_id
+    const allMessages = queryResult.data || queryResult || [];
+    const filteredMessages = allMessages.filter(r => String(r.tracking_id).trim() === trackingId);
     
-    console.log('[QUERY] Total ai_reply events:', allReplies.length);
-    console.log('[QUERY] Filtered by tracking ID:', trackingId, 'Count:', filteredReplies.length);
+    console.log('[QUERY] Total conversation events:', allMessages.length);
+    console.log('[QUERY] Filtered by tracking ID:', trackingId, 'Count:', filteredMessages.length);
     
-    // Since we stored AI data in existing fields, extract it from there
-    const replies = filteredReplies.map(result => {
-      // Extract AI response from user_agent field (where we stored it)
-      const aiResponseText = result.user_agent || '';
-      const aiResponse = aiResponseText.startsWith('AI_Response: ') ? 
-        aiResponseText.substring(13) : aiResponseText; // Remove "AI_Response: " prefix
-      
-      // Debug: log the actual tracking_id value and length
-      console.log('[DEBUG] Raw tracking_id:', JSON.stringify(result.tracking_id), 'Length:', result.tracking_id?.length);
-      
-      return {
-        tracking_id: result.tracking_id,
-        timestamp: result.timestamp,
-        event_type: result.event_type,
-        ai_response: aiResponse,
-        sender: result.email_address,
-        recipient: result.recipient,
-        processed: result.processed
-      };
+    // Sort by timestamp to get chronological order
+    filteredMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    
+    // Process messages and combine lead + AI responses
+    const conversation = [];
+    let currentReply = null;
+    
+    filteredMessages.forEach(result => {
+      if (result.event_type === 'lead_message') {
+        // Lead message - start a new reply object
+        const leadMessageText = result.user_agent || '';
+        const leadMessage = leadMessageText.startsWith('Lead_Message: ') ? 
+          leadMessageText.substring(14) : leadMessageText;
+        
+        currentReply = {
+          tracking_id: result.tracking_id,
+          timestamp: result.timestamp,
+          event_type: 'conversation',
+          lead_message: leadMessage,
+          ai_response: null,
+          sender: result.email_address,
+          recipient: result.recipient,
+          processed: result.processed
+        };
+        
+      } else if (result.event_type === 'ai_reply' && currentReply) {
+        // AI response - add to current reply
+        const aiResponseText = result.user_agent || '';
+        const aiResponse = aiResponseText.startsWith('AI_Response: ') ? 
+          aiResponseText.substring(13) : aiResponseText;
+        
+        currentReply.ai_response = aiResponse;
+        conversation.push(currentReply);
+        currentReply = null;
+        
+      } else if (result.event_type === 'ai_reply' && !currentReply) {
+        // AI response without lead message (backwards compatibility)
+        const aiResponseText = result.user_agent || '';
+        const aiResponse = aiResponseText.startsWith('AI_Response: ') ? 
+          aiResponseText.substring(13) : aiResponseText;
+        
+        conversation.push({
+          tracking_id: result.tracking_id,
+          timestamp: result.timestamp,
+          event_type: result.event_type,
+          lead_message: null,
+          ai_response: aiResponse,
+          sender: result.email_address,
+          recipient: result.recipient,
+          processed: result.processed
+        });
+      }
     });
+    
+    // If there's an incomplete reply (lead message without AI response), add it
+    if (currentReply) {
+      conversation.push(currentReply);
+    }
+    
+    console.log('[QUERY] Processed conversation entries:', conversation.length);
+    
+    return conversation;
 
-    return replies;
   } catch (error) {
     console.error('[QUERY] Error getting replies:', error);
     return [];
@@ -856,4 +901,90 @@ function generateSimpleVector(text) {
   // Simple hash-based vector generation for demo
   const hash = text.split('').reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) & 0xffffffff, 0);
   return [hash % 100 / 100, (hash * 2) % 100 / 100];
+}
+
+// Store lead's original message in Zilliz
+async function storeLeadMessage(emailData, trackingId) {
+  try {
+    console.log('[ZILLIZ STORE] Storing lead message for tracking ID:', trackingId);
+    
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('[ZILLIZ STORE] Missing environment variables');
+      return { success: false, error: 'Missing Zilliz credentials', stored: false };
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    const collectionName = 'email_tracking_events';
+    console.log('[ZILLIZ STORE] Using collection:', collectionName);
+    
+    // Load collection first
+    console.log('[ZILLIZ STORE] Loading collection for lead message...');
+    try {
+      const loadResult = await client.loadCollection({ collection_name: collectionName });
+      console.log('[ZILLIZ STORE] Collection loaded:', loadResult);
+    } catch (loadError) {
+      console.error('[ZILLIZ STORE] Failed to load collection:', loadError);
+    }
+
+    // Store lead message using same schema as other events
+    const leadData = {
+      tracking_id: trackingId,
+      event_type: 'lead_message',
+      timestamp: new Date().toISOString(),
+      user_agent: `Lead_Message: ${emailData.body || emailData.bodyHtml || 'No content'}`,
+      ip_address: '127.0.0.1',
+      email_address: emailData.from || 'Unknown',
+      recipient: emailData.to || 'Unknown',
+      processed: false,
+      dummy_vector: [0.0, 0.0]
+    };
+
+    console.log('[ZILLIZ STORE] Preparing to insert lead message:', {
+      tracking_id: leadData.tracking_id,
+      event_type: leadData.event_type,
+      user_agent_length: leadData.user_agent.length
+    });
+
+    const insertResult = await client.insert({
+      collection_name: collectionName,
+      data: [leadData]
+    });
+
+    console.log('[ZILLIZ STORE] Lead message insert result:', insertResult);
+    
+    // Force a flush to ensure data is persisted
+    console.log('[ZILLIZ STORE] Flushing lead message data...');
+    try {
+      const flushResult = await client.flush({ collection_names: [collectionName] });
+      console.log('[ZILLIZ STORE] Lead message flush result:', flushResult);
+    } catch (flushError) {
+      console.error('[ZILLIZ STORE] Lead message flush error (not critical):', flushError);
+    }
+    
+    console.log('[ZILLIZ STORE] Lead message stored successfully');
+    
+    return { 
+      success: true, 
+      stored: true,
+      collection: collectionName,
+      data: leadData
+    };
+
+  } catch (error) {
+    console.error('[ZILLIZ STORE] Lead message storage error:', error);
+    console.error('[ZILLIZ STORE] Error details:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack?.substring(0, 500)
+    });
+    return { 
+      success: false, 
+      error: error.message, 
+      stored: false 
+    };
+  }
 }
