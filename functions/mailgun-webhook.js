@@ -215,7 +215,23 @@ function verifyWebhookSignature(token, timestamp, signature, signingKey) {
 
 // Function to extract tracking ID from various sources
 function extractTrackingId(formData, subject, body) {
-  // Method 1: Look for tracking ID in recipient email address (most reliable)
+  // Method 1: Message-ID correlation (MOST RELIABLE)
+  const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
+  if (inReplyTo) {
+    console.log('[EXTRACT] Checking In-Reply-To for Message-ID correlation:', inReplyTo);
+    // Extract Message-ID from angle brackets: <20250920182642.0f18ea4c1f7d05c9@mg.examarkchat.com>
+    const messageIdMatch = inReplyTo.match(/<([^>]+)>/);
+    if (messageIdMatch) {
+      const messageId = messageIdMatch[1];
+      console.log('[EXTRACT] Found Message-ID:', messageId);
+      
+      // Look up tracking ID from Message-ID mapping
+      // Note: In production, this should query a database or shared storage
+      // For now, we'll still try the direct tracking-ID extraction as fallback
+    }
+  }
+  
+  // Method 2: Look for tracking ID in recipient email address (most reliable)
   const recipient = formData.recipient || formData.To || formData.to;
   if (recipient) {
     const emailMatch = recipient.match(/tracking-(\w+)@/);
@@ -225,24 +241,23 @@ function extractTrackingId(formData, subject, body) {
     }
   }
   
-  // Method 2: Look for tracking ID in subject line
+  // Method 3: Look for tracking ID in subject line
   const subjectMatch = subject?.match(/\[(\w+)\]/);
   if (subjectMatch) {
     console.log('[EXTRACT] Found tracking ID in subject:', subjectMatch[1]);
     return subjectMatch[1];
   }
   
-  // Method 3: Look for tracking ID in body text
+  // Method 4: Look for tracking ID in body text
   const bodyMatch = body?.match(/tracking[_\s]*id[:\s]*(\w+)/i);
   if (bodyMatch) {
     console.log('[EXTRACT] Found tracking ID in body:', bodyMatch[1]);
     return bodyMatch[1];
   }
   
-  // Method 4: Look in In-Reply-To header for tracking-ID pattern (FIXED)
-  const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
+  // Method 5: Look in In-Reply-To header for tracking-ID pattern (FIXED)
   if (inReplyTo) {
-    console.log('[EXTRACT] Checking In-Reply-To header:', inReplyTo);
+    console.log('[EXTRACT] Checking In-Reply-To header for tracking pattern:', inReplyTo);
     const trackingMatch = inReplyTo.match(/tracking-([a-f0-9]{32})/i);
     if (trackingMatch) {
       console.log('[EXTRACT] Found tracking ID in In-Reply-To:', trackingMatch[1]);
@@ -250,7 +265,7 @@ function extractTrackingId(formData, subject, body) {
     }
   }
   
-  // Method 5: Look in References header for tracking-ID pattern (FIXED)
+  // Method 6: Look in References header for tracking-ID pattern (FIXED)
   const references = formData.References || formData.references;
   if (references) {
     console.log('[EXTRACT] Checking References header:', references);
