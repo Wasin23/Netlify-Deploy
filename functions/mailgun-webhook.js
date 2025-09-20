@@ -516,6 +516,109 @@ function generateReplySubject(originalSubject, trackingId) {
   return `Re: ${cleanSubject}`;
 }
 
+// Load agent settings from Zilliz
+async function loadAgentSettings(userId = 'default') {
+  try {
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('⚠️ [SETTINGS] No Zilliz credentials, using defaults');
+      return getDefaultSettings();
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    // Query all settings for the user
+    const searchResult = await client.search({
+      collection_name: 'agent_settings',
+      vector: [0], // Dummy vector since we're using filter
+      limit: 100,
+      filter: `user_id == "${userId}"`
+    });
+
+    const settings = {};
+    if (searchResult.results && searchResult.results.length > 0) {
+      for (const result of searchResult.results) {
+        if (result.user_id === userId) {
+          // Parse setting_value based on setting_type
+          let value;
+          try {
+            if (result.setting_type === 'array' || result.setting_type === 'object') {
+              value = JSON.parse(result.setting_value);
+            } else if (result.setting_type === 'boolean') {
+              value = result.setting_value === 'true';
+            } else if (result.setting_type === 'number') {
+              value = parseFloat(result.setting_value);
+            } else {
+              value = result.setting_value;
+            }
+          } catch (parseError) {
+            console.error('❌ [SETTINGS] Parse error for', result.setting_key, parseError);
+            value = result.setting_value; // Fallback to string
+          }
+          
+          settings[result.setting_key] = value;
+        }
+      }
+    }
+
+    console.log('⚙️ [SETTINGS] Loaded settings from Zilliz:', Object.keys(settings));
+    return Object.keys(settings).length > 0 ? settings : getDefaultSettings();
+
+  } catch (error) {
+    console.error('❌ [SETTINGS] Error loading from Zilliz:', error);
+    return getDefaultSettings();
+  }
+}
+
+// Get default settings when Zilliz is unavailable
+function getDefaultSettings() {
+  return {
+    company_name: 'Our Company',
+    product_name: 'Our Solution',
+    value_propositions: ['Industry-leading performance', '24/7 expert support', 'Seamless integration'],
+    calendar_link: '',
+    response_tone: 'professional_friendly',
+    meeting_pushiness: 'medium',
+    technical_depth: 'medium',
+    question_threshold: 2,
+    positive_immediate_booking: false,
+    complex_question_escalation: true
+  };
+}
+
+// Extract lead information from email data
+function extractLeadInfo(emailData) {
+  const fromEmail = emailData.from || '';
+  const body = emailData.body || '';
+  
+  // Extract name from email or signature
+  let leadName = '';
+  const emailNameMatch = fromEmail.match(/^([^<]+)</);
+  if (emailNameMatch) {
+    leadName = emailNameMatch[1].trim().replace(/['"]/g, '');
+  } else {
+    const emailUserMatch = fromEmail.match(/([^@]+)@/);
+    if (emailUserMatch) {
+      leadName = emailUserMatch[1].replace(/[._]/g, ' ');
+    }
+  }
+  
+  // Extract company from email domain
+  let leadCompany = '';
+  const domainMatch = fromEmail.match(/@([^.]+)/);
+  if (domainMatch) {
+    leadCompany = domainMatch[1].charAt(0).toUpperCase() + domainMatch[1].slice(1);
+  }
+  
+  return {
+    lead_name: leadName || 'there',
+    lead_company: leadCompany || '',
+    lead_email: fromEmail
+  };
+}
+
 // Function to generate AI response suggestions
 // Enhanced AI Response Generation with Smart Intent Classification
 async function generateAIResponse(emailData) {
@@ -526,22 +629,38 @@ async function generateAIResponse(emailData) {
 
     console.log('🤖 [SMART AI] Generating enhanced AI response...');
     
-    // Step 1: Classify intent using OpenAI
+    // Step 1: Load agent settings from Zilliz
+    let agentSettings = {};
+    try {
+      agentSettings = await loadAgentSettings();
+      console.log('⚙️ [SMART AI] Loaded agent settings:', Object.keys(agentSettings));
+    } catch (error) {
+      console.error('⚠️ [SMART AI] Failed to load settings, using defaults:', error);
+      agentSettings = getDefaultSettings();
+    }
+    
+    // Step 2: Classify intent using OpenAI
     const intent = await classifyIntentWithAI(emailData.body);
     console.log('🎯 [SMART AI] Intent classified:', intent);
     
-    // Step 2: Analyze sentiment
+    // Step 3: Analyze sentiment
     const sentiment = await analyzeSentimentWithAI(emailData.body);
     console.log('💭 [SMART AI] Sentiment analyzed:', sentiment);
     
-    // Step 3: Generate context-aware response
-    const response = await generateContextAwareResponse(emailData, intent, sentiment);
+    // Step 4: Extract lead information for personalization
+    const leadInfo = extractLeadInfo(emailData);
+    console.log('👤 [SMART AI] Lead info extracted:', leadInfo);
+    
+    // Step 5: Generate context-aware response with template engine
+    const response = await generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo);
     
     return {
       success: true,
       response: response,
-      provider: 'Smart AI Responder',
-      analysis: { intent, sentiment }
+      provider: 'Enhanced Smart AI Responder v2.0',
+      analysis: { intent, sentiment },
+      settings_used: !!agentSettings.company_name,
+      personalization: leadInfo
     };
 
   } catch (error) {
@@ -635,38 +754,176 @@ Respond with just the sentiment word, nothing else.`;
   }
 }
 
-// Context-Aware Response Generation
-async function generateContextAwareResponse(emailData, intent, sentiment) {
-  // Get default settings (will be replaced with Zilliz storage later)
-  const settings = getDefaultResponseSettings();
-  
-  // Build context for AI prompt
-  const contextPrompt = `
-You are a professional sales AI assistant responding to a B2B email reply.
+// Enhanced Context-Aware Response Generation with Template Engine
+async function generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo) {
+  try {
+    // Get appropriate template based on intent
+    const template = getResponseTemplate(intent, sentiment, agentSettings);
+    
+    // Apply template substitutions
+    const personalizedResponse = applyTemplateSubstitutions(template, {
+      ...agentSettings,
+      ...leadInfo,
+      intent,
+      sentiment
+    });
 
-COMPANY INFO:
-- Company: ${settings.company_info.name}
-- Product: ${settings.company_info.product_name}
-- Key Benefits: ${settings.company_info.value_props.join(', ')}
-- Calendar Link: ${settings.company_info.calendar_link}
+    // If we have OpenAI, enhance the template with AI
+    if (process.env.OPENAI_API_KEY && agentSettings.response_tone !== 'template_only') {
+      return await enhanceResponseWithAI(personalizedResponse, emailData, intent, sentiment, agentSettings);
+    }
+
+    return personalizedResponse;
+
+  } catch (error) {
+    console.error('❌ [TEMPLATE RESPONSE] Generation failed:', error);
+    return generateFallbackResponse(intent, agentSettings);
+  }
+}
+
+// Get response template based on intent and sentiment
+function getResponseTemplate(intent, sentiment, settings) {
+  const templates = {
+    'meeting_request_positive': `Hi {{lead_name}},
+
+Thank you for your interest in {{product_name}}! I'd be delighted to schedule a meeting to discuss how {{company_name}} can help {{lead_company}}.
+
+{{#calendar_link}}Here's my calendar link to book a time that works for you: {{calendar_link}}{{/calendar_link}}
+{{^calendar_link}}I'll send over some available times shortly.{{/calendar_link}}
+
+Looking forward to our conversation!
+
+Best regards,
+{{company_name}} Team`,
+
+    'pricing_question': `Hi {{lead_name}},
+
+Great question about pricing! {{product_name}} is designed to provide excellent value through:
+
+{{#value_propositions}}
+• {{.}}
+{{/value_propositions}}
+
+I'd love to discuss pricing details and show you how we can deliver {{value_proposition_summary}} for {{lead_company}}.
+
+{{#calendar_link}}Would you like to schedule a quick 15-minute call? {{calendar_link}}{{/calendar_link}}
+
+Best regards,
+{{company_name}} Team`,
+
+    'technical_question': `Hi {{lead_name}},
+
+Excellent technical question! {{product_name}} handles this through our {{technical_approach}}.
+
+{{#technical_details}}
+{{technical_details}}
+{{/technical_details}}
+
+{{#complex_question_escalation}}I'd be happy to arrange a technical deep-dive session with our engineering team to cover all the details.{{/complex_question_escalation}}
+
+{{#calendar_link}}Here's my calendar if you'd like to discuss further: {{calendar_link}}{{/calendar_link}}
+
+Best regards,
+{{company_name}} Team`,
+
+    'general_positive': `Hi {{lead_name}},
+
+Thank you for your interest in {{product_name}}! I'm excited to help {{lead_company}} achieve {{value_proposition_summary}}.
+
+{{#meeting_suggestion}}Would you be interested in a brief 15-minute call to discuss your specific needs?{{/meeting_suggestion}}
+
+{{#calendar_link}}Feel free to book a time that works for you: {{calendar_link}}{{/calendar_link}}
+
+Best regards,
+{{company_name}} Team`
+  };
+
+  // Return specific template or fallback to general positive
+  return templates[intent] || templates['general_positive'];
+}
+
+// Apply template variable substitutions
+function applyTemplateSubstitutions(template, variables) {
+  let result = template;
+
+  // Simple variable substitution
+  for (const [key, value] of Object.entries(variables)) {
+    if (typeof value === 'string' || typeof value === 'number') {
+      const regex = new RegExp(`{{${key}}}`, 'g');
+      result = result.replace(regex, value || '');
+    }
+  }
+
+  // Handle arrays (value propositions)
+  if (variables.value_propositions && Array.isArray(variables.value_propositions)) {
+    const listItems = variables.value_propositions.map(prop => `• ${prop}`).join('\n');
+    result = result.replace(/{{#value_propositions}}[\s\S]*?{{\/value_propositions}}/g, listItems);
+    
+    // Create summary for single mention
+    const summary = variables.value_propositions.slice(0, 2).join(' and ');
+    result = result.replace(/{{value_proposition_summary}}/g, summary);
+  }
+
+  // Handle conditional blocks
+  if (variables.calendar_link) {
+    result = result.replace(/{{#calendar_link}}([\s\S]*?){{\/calendar_link}}/g, '$1');
+    result = result.replace(/{{calendar_link}}/g, variables.calendar_link);
+  } else {
+    result = result.replace(/{{#calendar_link}}[\s\S]*?{{\/calendar_link}}/g, '');
+  }
+  
+  // Remove calendar else blocks if we have calendar link
+  if (variables.calendar_link) {
+    result = result.replace(/{{\\^calendar_link}}[\s\S]*?{{\/calendar_link}}/g, '');
+  } else {
+    result = result.replace(/{{\\^calendar_link}}([\s\S]*?){{\/calendar_link}}/g, '$1');
+  }
+
+  // Handle meeting suggestion based on settings
+  if (variables.question_threshold <= 1 || variables.positive_immediate_booking) {
+    result = result.replace(/{{#meeting_suggestion}}([\s\S]*?){{\/meeting_suggestion}}/g, '$1');
+  } else {
+    result = result.replace(/{{#meeting_suggestion}}[\s\S]*?{{\/meeting_suggestion}}/g, '');
+  }
+
+  // Handle technical escalation
+  if (variables.complex_question_escalation) {
+    result = result.replace(/{{#complex_question_escalation}}([\s\S]*?){{\/complex_question_escalation}}/g, '$1');
+  } else {
+    result = result.replace(/{{#complex_question_escalation}}[\s\S]*?{{\/complex_question_escalation}}/g, '');
+  }
+
+  // Clean up any remaining template syntax
+  result = result.replace(/{{[^}]+}}/g, '');
+  
+  // Clean up extra whitespace
+  result = result.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+
+  return result;
+}
+
+// Enhance template response with AI for better personalization
+async function enhanceResponseWithAI(templateResponse, emailData, intent, sentiment, settings) {
+  const enhancementPrompt = `
+Enhance this template response to be more personalized and natural while preserving all key information:
+
+TEMPLATE RESPONSE:
+"${templateResponse}"
 
 ORIGINAL EMAIL CONTEXT:
 - From: ${emailData.from}
-- Subject: ${emailData.subject}
-- Their Reply: "${emailData.body}"
-
-ANALYSIS:
+- Their Message: "${emailData.body}"
 - Intent: ${intent}
 - Sentiment: ${sentiment}
 
-RESPONSE STYLE:
-- Tone: ${settings.response_style.tone}
-- Meeting Approach: ${settings.response_style.meeting_pushiness}
+GUIDELINES:
+- Keep the same structure and key information
+- Make it sound more natural and personalized
+- Maintain ${settings.response_tone} tone
+- Don't add new promises or information not in template
+- Keep it concise and professional
 
-Generate a personalized response based on their intent. Guidelines:
-${getResponseGuidelines(intent, settings)}
-
-Keep it professional, helpful, and personalized. Include calendar link if appropriate for meeting-related intents.`;
+Enhanced response:`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -676,23 +933,97 @@ Keep it professional, helpful, and personalized. Include calendar link if approp
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [{ role: 'user', content: contextPrompt }],
-        temperature: 0.7,
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: enhancementPrompt }],
+        temperature: 0.3,
         max_tokens: 400
       })
     });
 
     const data = await response.json();
-    return data.choices[0].message.content.trim();
+    const enhancedResponse = data.choices[0].message.content.trim();
+    
+    console.log('✨ [AI ENHANCE] Template enhanced with AI');
+    return enhancedResponse;
 
   } catch (error) {
-    console.error('❌ [CONTEXT RESPONSE] Generation failed:', error);
-    return generateTemplateResponse(intent, sentiment, settings);
+    console.error('❌ [AI ENHANCE] Enhancement failed, using template:', error);
+    return templateResponse;
   }
 }
 
-// Default response settings (temporary - will move to Zilliz)
+// Fallback response when all else fails
+function generateFallbackResponse(intent, settings) {
+  const companyName = settings.company_name || 'our company';
+  const productName = settings.product_name || 'our solution';
+  
+  return `Thank you for your interest in ${productName}! I'd be happy to help you learn more about how ${companyName} can assist you. I'll follow up with more details shortly.
+
+Best regards,
+${companyName} Team`;
+}
+
+// Get response settings from Zilliz (with fallback to defaults)
+async function getResponseSettings(userId = 'default') {
+  try {
+    console.log('⚙️ [SETTINGS] Loading configuration from Zilliz...');
+    
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.warn('⚠️ [SETTINGS] Zilliz credentials missing, using defaults');
+      return getDefaultResponseSettings();
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    const collectionName = 'agent_settings';
+    
+    // Load collection
+    await client.loadCollection({ collection_name: collectionName });
+
+    // Search for all settings for this user
+    const searchResult = await client.search({
+      collection_name: collectionName,
+      vectors: [[0.1, 0.2]],
+      search_params: { nprobe: 10 },
+      limit: 100,
+      output_fields: ['setting_key', 'setting_value', 'setting_type', 'user_id']
+    });
+
+    const settings = {};
+    if (searchResult.results && searchResult.results.length > 0) {
+      for (const result of searchResult.results) {
+        if (result.user_id === userId) {
+          try {
+            settings[result.setting_key] = JSON.parse(result.setting_value);
+          } catch (e) {
+            settings[result.setting_key] = result.setting_value;
+          }
+        }
+      }
+    }
+
+    // Merge with defaults for any missing settings
+    const defaultSettings = getDefaultResponseSettings();
+    const finalSettings = {
+      company_info: settings.company_info || defaultSettings.company_info,
+      response_style: settings.response_style || defaultSettings.response_style,
+      knowledge_base: settings.knowledge_base || defaultSettings.knowledge_base,
+      meeting_triggers: settings.meeting_triggers || defaultSettings.meeting_triggers
+    };
+
+    console.log('✅ [SETTINGS] Configuration loaded from Zilliz');
+    return finalSettings;
+
+  } catch (error) {
+    console.error('❌ [SETTINGS] Failed to load from Zilliz, using defaults:', error);
+    return getDefaultResponseSettings();
+  }
+}
+
+// Default response settings (fallback)
 function getDefaultResponseSettings() {
   return {
     company_info: {
@@ -1233,5 +1564,66 @@ async function storeLeadMessage(emailData, trackingId) {
       error: error.message, 
       stored: false 
     };
+  }
+}
+
+// Load agent settings from Zilliz
+async function loadAgentSettings() {
+  try {
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('[AGENT SETTINGS] Missing Zilliz credentials, using defaults');
+      return getDefaultResponseSettings();
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    const collectionName = 'agent_settings';
+    
+    // Query all settings
+    const results = await client.query({
+      collection_name: collectionName,
+      filter: 'setting_key != ""',
+      output_fields: ['setting_key', 'setting_value'],
+      limit: 100
+    });
+
+    if (!results.data || results.data.length === 0) {
+      console.log('[AGENT SETTINGS] No settings found, using defaults');
+      return getDefaultResponseSettings();
+    }
+
+    // Convert array of settings back to nested object
+    const settings = getDefaultResponseSettings(); // Start with defaults
+    
+    results.data.forEach(item => {
+      const key = item.setting_key;
+      let value;
+      
+      try {
+        value = JSON.parse(item.setting_value);
+      } catch {
+        value = item.setting_value; // Keep as string if not JSON
+      }
+      
+      // Map settings back to nested structure
+      if (key === 'company_name') settings.company_info.name = value;
+      else if (key === 'product_name') settings.company_info.product_name = value;
+      else if (key === 'value_props') settings.company_info.value_props = value;
+      else if (key === 'calendar_link') settings.company_info.calendar_link = value;
+      else if (key === 'response_tone') settings.response_style.tone = value;
+      else if (key === 'meeting_pushiness') settings.response_style.meeting_pushiness = value;
+      else if (key === 'technical_depth') settings.response_style.technical_depth = value;
+      else if (key === 'followup_frequency') settings.response_style.followup_frequency = value;
+    });
+
+    console.log('[AGENT SETTINGS] Loaded settings from Zilliz');
+    return settings;
+
+  } catch (error) {
+    console.error('[AGENT SETTINGS] Failed to load from Zilliz:', error);
+    return getDefaultResponseSettings();
   }
 }
