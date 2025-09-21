@@ -400,6 +400,176 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   }
 }
 
+// Analyze conversation state to determine if conversation should continue
+async function analyzeConversationState(originalEmailData, aiResponseText, trackingId) {
+  try {
+    console.log('[CONVERSATION STATE] Analyzing conversation state...');
+    
+    const emailBody = originalEmailData.body?.toLowerCase() || '';
+    const aiResponse = aiResponseText?.toLowerCase() || '';
+    
+    // Get conversation history from Zilliz to count interactions
+    const conversationHistory = await getConversationHistory(trackingId);
+    const interactionCount = conversationHistory.length;
+    
+    console.log('[CONVERSATION STATE] Interaction count:', interactionCount);
+    
+    // EXPLICIT REJECTION/UNSUBSCRIBE - End conversation immediately
+    const rejectionKeywords = [
+      'unsubscribe', 'remove me', 'not interested', 'stop emailing',
+      'no thanks', 'not a good fit', 'please remove', 'opt out',
+      'don\'t contact', 'already have', 'satisfied with current'
+    ];
+    
+    const hasRejection = rejectionKeywords.some(keyword => emailBody.includes(keyword));
+    if (hasRejection) {
+      console.log('[CONVERSATION STATE] Rejection detected - ending conversation');
+      return {
+        state: 'rejected',
+        shouldKeepOpen: false,
+        reason: 'Customer explicitly declined or unsubscribed'
+      };
+    }
+    
+    // MEETING BOOKED - End conversation (success!)
+    const meetingBookedKeywords = [
+      'booked', 'scheduled', 'calendar', 'meeting set', 'talk soon',
+      'see you', 'looking forward', 'confirmed'
+    ];
+    
+    const hasMeetingBooked = meetingBookedKeywords.some(keyword => 
+      emailBody.includes(keyword) || aiResponse.includes(keyword)
+    );
+    
+    if (hasMeetingBooked) {
+      console.log('[CONVERSATION STATE] Meeting booked - ending conversation');
+      return {
+        state: 'meeting_booked',
+        shouldKeepOpen: false,
+        reason: 'Meeting successfully scheduled'
+      };
+    }
+    
+    // ACTIVE ENGAGEMENT - Continue conversation
+    const engagementKeywords = [
+      'tell me more', 'interested', 'question', 'when', 'how',
+      'pricing', 'cost', 'demo', 'trial', 'can you', 'would like',
+      'more information', 'learn more', 'sounds good'
+    ];
+    
+    const hasEngagement = engagementKeywords.some(keyword => emailBody.includes(keyword));
+    
+    // INTERACTION LIMIT - Prevent infinite loops (max 5 interactions)
+    if (interactionCount >= 5) {
+      console.log('[CONVERSATION STATE] Interaction limit reached - ending conversation');
+      return {
+        state: 'interaction_limit',
+        shouldKeepOpen: false,
+        reason: 'Maximum interaction count reached (5)'
+      };
+    }
+    
+    // AUTO-RESPONDER DETECTION - End if it looks like an auto-reply
+    const autoResponderKeywords = [
+      'out of office', 'automatic reply', 'auto-generated', 'vacation',
+      'currently unavailable', 'away message'
+    ];
+    
+    const isAutoResponder = autoResponderKeywords.some(keyword => emailBody.includes(keyword));
+    if (isAutoResponder) {
+      console.log('[CONVERSATION STATE] Auto-responder detected - ending conversation');
+      return {
+        state: 'auto_responder',
+        shouldKeepOpen: false,
+        reason: 'Auto-responder detected'
+      };
+    }
+    
+    // CONTINUE CONVERSATION - Keep engaging
+    if (hasEngagement && interactionCount < 3) {
+      console.log('[CONVERSATION STATE] Active engagement - continuing conversation');
+      return {
+        state: 'engaged',
+        shouldKeepOpen: true,
+        reason: 'Customer showing interest, continuing conversation'
+      };
+    }
+    
+    // DEFAULT - End conversation after 2 interactions unless highly engaged
+    if (interactionCount >= 2) {
+      console.log('[CONVERSATION STATE] Default limit reached - ending conversation');
+      return {
+        state: 'natural_end',
+        shouldKeepOpen: false,
+        reason: 'Natural conversation conclusion'
+      };
+    }
+    
+    // FIRST INTERACTION - Always continue
+    console.log('[CONVERSATION STATE] First interaction - continuing conversation');
+    return {
+      state: 'first_interaction',
+      shouldKeepOpen: true,
+      reason: 'First interaction, keeping conversation open'
+    };
+    
+  } catch (error) {
+    console.error('[CONVERSATION STATE] Error analyzing state:', error);
+    // Default to safe behavior - continue conversation
+    return {
+      state: 'error',
+      shouldKeepOpen: true,
+      reason: 'Error in analysis, defaulting to continue'
+    };
+  }
+}
+
+// Get conversation history for a tracking ID
+async function getConversationHistory(trackingId) {
+  try {
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('[CONVERSATION HISTORY] No Zilliz credentials');
+      return [];
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    // Search for all interactions with this tracking ID
+    const searchResult = await client.search({
+      collection_name: 'email_tracking_events',
+      vector: [0], // Dummy vector
+      limit: 50,
+      filter: `tracking_id == "${trackingId}"`
+    });
+
+    const interactions = [];
+    if (searchResult.results && searchResult.results.length > 0) {
+      for (const result of searchResult.results) {
+        if (result.tracking_id === trackingId) {
+          interactions.push({
+            timestamp: result.timestamp,
+            event_type: result.event_type,
+            user_agent: result.user_agent // This contains AI responses
+          });
+        }
+      }
+    }
+
+    // Sort by timestamp
+    interactions.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    
+    console.log('[CONVERSATION HISTORY] Found', interactions.length, 'interactions for', trackingId);
+    return interactions;
+
+  } catch (error) {
+    console.error('[CONVERSATION HISTORY] Error fetching history:', error);
+    return [];
+  }
+}
+
 // Function to automatically send AI response via Mailgun
 async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
   try {
@@ -414,7 +584,16 @@ async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
       };
     }
 
-    const fromEmail = `ExaMark Support <noreply@${process.env.MAILGUN_DOMAIN}>`;
+    // Determine conversation state and appropriate reply-to address
+    const conversationState = await analyzeConversationState(originalEmailData, aiResponseText, trackingId);
+    const shouldKeepConversationOpen = conversationState.shouldKeepOpen;
+    
+    // Smart reply routing: use replies@ if conversation should continue, noreply@ if it should end
+    const replyAddress = shouldKeepConversationOpen 
+      ? `replies@${process.env.MAILGUN_DOMAIN}`
+      : `noreply@${process.env.MAILGUN_DOMAIN}`;
+    
+    const fromEmail = `ExaMark AI Assistant <${replyAddress}>`;
     const toEmail = originalEmailData.from;
     const subject = generateReplySubject(originalEmailData.subject, trackingId);
     
@@ -423,19 +602,41 @@ async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
       toEmail, 
       subject,
       hasAiResponse: !!aiResponseText,
-      responseLength: aiResponseText?.length 
+      responseLength: aiResponseText?.length,
+      conversationState: conversationState.state,
+      keepOpen: shouldKeepConversationOpen
     });
     
-    // Simple text content - no HTML for now to avoid encoding issues
-    const textContent = `${aiResponseText}
-
----
-This is an automated response powered by AI. If you need immediate assistance, please don't hesitate to reach out directly.
+    // Generate conversation-state-aware footer message
+    let footerMessage = '';
+    if (shouldKeepConversationOpen) {
+      footerMessage = `---
+This is an AI-powered response from ExaMark. Feel free to reply with any questions - I'm here to help!
 
 Best regards,
-The ExaMark Team
+ExaMark AI Assistant
+Exabits Team`;
+    } else {
+      // Conversation ending - provide direct contact info
+      const endingReason = conversationState.state === 'meeting_booked' 
+        ? 'Thank you for your interest! We look forward to our upcoming conversation.'
+        : 'If you need further assistance, please feel free to reach out to our team directly.';
+      
+      footerMessage = `---
+${endingReason}
 
-Message ID: ${trackingId} | Powered by ExaMark AI`;
+For immediate assistance, contact us directly at: support@exabits.ai
+
+Best regards,
+ExaMark AI Assistant
+Exabits Team`;
+    }
+    
+    const textContent = `${aiResponseText}
+
+${footerMessage}
+
+Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
 
     // Send email via Mailgun API - simplified version
     const params = new URLSearchParams();
