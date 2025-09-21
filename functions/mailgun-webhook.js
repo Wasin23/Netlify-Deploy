@@ -127,16 +127,24 @@ exports.handler = async function(event, context) {
             
             // Check if we should automatically create a calendar event
             if (aiResponse.intent) {
+              console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
+              console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
               try {
                 const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
+                console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
                 if (calendarResult.eventCreated) {
                   console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
+                  aiResponse.calendarEvent = calendarResult;
+                } else {
+                  console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
                   aiResponse.calendarEvent = calendarResult;
                 }
               } catch (calendarError) {
                 console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
                 aiResponse.calendarEvent = { success: false, error: calendarError.message };
               }
+            } else {
+              console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
             }
           } catch (emailError) {
             console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
@@ -271,11 +279,25 @@ function extractTrackingId(formData, subject, body) {
     }
   }
   
-  // Method 3: Look for tracking ID in subject line [TRACKINGID]
-  const subjectMatch = subject?.match(/\[([a-f0-9]{32})\]/);
-  if (subjectMatch) {
-    console.log('[EXTRACT] Found tracking ID in subject:', subjectMatch[1]);
-    return subjectMatch[1];
+  // Method 3: Look for tracking ID in subject line [TRACKINGID] or Track_ID patterns
+  const subjectMatch32 = subject?.match(/\[([a-f0-9]{32})\]/);
+  if (subjectMatch32) {
+    console.log('[EXTRACT] Found 32-char tracking ID in subject:', subjectMatch32[1]);
+    return subjectMatch32[1];
+  }
+  
+  // Also check for Track_ patterns for testing purposes
+  const subjectMatchTrack = subject?.match(/Track_([a-zA-Z0-9]+)/);
+  if (subjectMatchTrack) {
+    console.log('[EXTRACT] Found Track_ pattern in subject:', subjectMatchTrack[1]);
+    return subjectMatchTrack[1];
+  }
+  
+  // Check for tracking ID in brackets with various formats
+  const subjectMatchBracket = subject?.match(/\[([a-zA-Z0-9_-]{5,32})\]/);
+  if (subjectMatchBracket) {
+    console.log('[EXTRACT] Found bracketed tracking ID in subject:', subjectMatchBracket[1]);
+    return subjectMatchBracket[1];
   }
   
   // Method 4: Look for tracking ID in recipient email address
@@ -1012,6 +1034,7 @@ async function generateAIResponse(emailData) {
     return {
       success: true,
       response: response,
+      intent: intent,  // Add intent to the response object for calendar detection
       provider: 'Enhanced Smart AI Responder v2.0',
       analysis: { intent, sentiment },
       settings_used: !!agentSettings.company_name,
@@ -1259,6 +1282,21 @@ function applyTemplateSubstitutions(template, variables) {
 
 // Enhance template response with AI for better personalization
 async function enhanceResponseWithAI(templateResponse, emailData, intent, sentiment, settings) {
+  // First, check if this email contains a meeting time that needs timezone confirmation
+  let timeZoneConfirmationNeeded = false;
+  let meetingDetails = null;
+  
+  if (intent === 'meeting_request_positive' || intent === 'meeting_time_preference') {
+    try {
+      meetingDetails = await detectConfirmedMeetingTime(emailData.body, intent);
+      if (meetingDetails.found && meetingDetails.suggestTimeZoneConfirmation) {
+        timeZoneConfirmationNeeded = true;
+      }
+    } catch (error) {
+      console.log('⚠️ [AI ENHANCE] Could not check meeting details for timezone:', error);
+    }
+  }
+  
   const enhancementPrompt = `
 Enhance this template response to be more personalized and natural while preserving all key information:
 
@@ -1271,12 +1309,22 @@ ORIGINAL EMAIL CONTEXT:
 - Intent: ${intent}
 - Sentiment: ${sentiment}
 
+${timeZoneConfirmationNeeded ? `
+IMPORTANT TIMEZONE REQUIREMENT:
+The lead mentioned a meeting time but didn't specify their time zone. You MUST add a timezone confirmation question to the response.
+
+Add this to your response: "Just to confirm, what time zone are you in? This helps me schedule it correctly on my calendar."
+
+Meeting details detected: ${JSON.stringify(meetingDetails)}
+` : ''}
+
 GUIDELINES:
 - Keep the same structure and key information
 - Make it sound more natural and personalized
 - Maintain ${settings.response_tone} tone
 - Don't add new promises or information not in template
 - Keep it concise and professional
+${timeZoneConfirmationNeeded ? '- MUST include the timezone confirmation question' : ''}
 
 Enhanced response:`;
 
@@ -1299,6 +1347,9 @@ Enhanced response:`;
     const enhancedResponse = data.choices[0].message.content.trim();
     
     console.log('✨ [AI ENHANCE] Template enhanced with AI');
+    if (timeZoneConfirmationNeeded) {
+      console.log('🕰️ [AI ENHANCE] Added timezone confirmation to response');
+    }
     return enhancedResponse;
 
   } catch (error) {
@@ -2013,13 +2064,15 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
     // Create the calendar event
     const eventDetails = {
       title: `Sales Discussion - ${leadInfo.name || 'Prospect'}`,
-      description: `Automatic meeting scheduled via AI email responder\n\nLead: ${leadInfo.name}\nEmail: ${emailData.from}\nCompany: ${leadInfo.company}\n\nOriginal message:\n${emailBody.substring(0, 300)}...`,
+      description: `Automatic meeting scheduled via AI email responder\n\nLead: ${leadInfo.name}\nEmail: ${emailData.from}\nCompany: ${leadInfo.company}\n\nTime Zone: ${meetingTimeDetected.timeZone}${meetingTimeDetected.timeZoneSpecified ? ' (confirmed)' : ' (assumed - please confirm)'}\n\nOriginal message:\n${emailBody.substring(0, 300)}...`,
       startTime: meetingTimeDetected.startTime,
       endTime: meetingTimeDetected.endTime,
       timeZone: meetingTimeDetected.timeZone || 'America/New_York',
       attendees: [
         { email: emailData.from, displayName: leadInfo.name }
-      ]
+      ],
+      // Add time zone confirmation flag for AI response
+      timeZoneNeedsConfirmation: meetingTimeDetected.suggestTimeZoneConfirmation || false
     };
     
     // Import and use calendar manager
@@ -2083,30 +2136,76 @@ async function detectConfirmedMeetingTime(emailBody, intent) {
     // Use OpenAI to parse the meeting time if available
     if (process.env.OPENAI_API_KEY) {
       const prompt = `
-Analyze this email to extract confirmed meeting times. Only return confirmed meetings, not suggestions.
+Current date and time: ${new Date().toISOString()} (it's currently ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })})
+
+Analyze this email to extract any confirmed meeting times. Pay special attention to meeting duration and time zone.
 
 Email: "${emailBody}"
 
-Task: Extract any confirmed meeting times and return JSON in this exact format:
+Your task: Extract any confirmed meeting times and return JSON in this exact format:
 {
   "found": true/false,
   "dateTime": "2024-01-15T14:00:00.000Z",
-  "timeZone": "America/New_York",
+  "timeZone": "America/New_York", 
   "duration": 30,
-  "confidence": "high/medium/low"
+  "confidence": "high/medium/low",
+  "originalText": "the exact text that mentioned the time",
+  "timeZoneSpecified": true/false,
+  "suggestTimeZoneConfirmation": true/false
 }
 
-Only set "found": true if there's a specific date AND time mentioned. Examples of confirmed times:
-- "Let's meet tomorrow at 2pm"
-- "Tuesday at 10am works"
-- "How about Monday the 15th at 3:30pm"
+Time Zone Detection Rules:
+- Look for explicit time zones: "2pm EST", "3pm PST", "10am UTC", "9am Central", "4pm GMT"
+- Common abbreviations: EST/EDT, PST/PDT, CST/CDT, MST/MDT, UTC, GMT
+- If NO time zone specified, set "timeZoneSpecified": false and "suggestTimeZoneConfirmation": true
+- If time zone IS specified, set "timeZoneSpecified": true and "suggestTimeZoneConfirmation": false
+- Default to "America/New_York" but flag when uncertain
 
-Do NOT set found: true for vague suggestions like:
-- "sometime next week"
-- "maybe we can chat"
-- "when are you available"
+Duration parsing rules:
+- Look for explicit durations: "15 minutes", "30 minutes", "1 hour", "2 hours", "45 minutes"
+- Convert to minutes: "1 hour" = 60, "2 hours" = 120, etc.
+- For phrases like "quick call", "brief chat" = 15 minutes
+- For "deep dive session", "detailed discussion" = 60 minutes unless specified
+- If no duration specified, default to 30 minutes
 
-Return only the JSON object.`;
+Examples of time zone handling:
+- "2pm EST tomorrow" → timeZone: "America/New_York", timeZoneSpecified: true, suggestTimeZoneConfirmation: false
+- "3pm PST Friday" → timeZone: "America/Los_Angeles", timeZoneSpecified: true, suggestTimeZoneConfirmation: false
+- "10am Central on Monday" → timeZone: "America/Chicago", timeZoneSpecified: true, suggestTimeZoneConfirmation: false
+- "tomorrow at 2pm" → timeZone: "America/New_York", timeZoneSpecified: false, suggestTimeZoneConfirmation: true
+- "Friday at 3pm" → timeZone: "America/New_York", timeZoneSpecified: false, suggestTimeZoneConfirmation: true
+
+Time Zone Mappings:
+- EST/EDT → "America/New_York"
+- PST/PDT → "America/Los_Angeles"  
+- CST/CDT → "America/Chicago"
+- MST/MDT → "America/Denver"
+- UTC/GMT → "UTC"
+
+Examples of what should trigger "found": true:
+- "How about tomorrow at 2pm EST for 15 minutes" → tomorrow at 2pm EST, duration: 15
+- "Let's meet Tuesday at 10:30am PST for an hour" → Tuesday at 10:30am PST, duration: 60
+- "I could do 3pm this tuesday for a quick call" → 3pm this tuesday, duration: 15 (suggest time zone confirmation)
+- "9am friday works for me" → 9am friday, duration: 30 (suggest time zone confirmation)
+- "Can we schedule a 45 minute session Friday at 4pm Central?" → Friday at 4pm Central, duration: 45
+
+Examples of what should NOT trigger "found": true:
+- "sometime next week" (too vague)
+- "maybe we can chat" (suggestion, not confirmation)  
+- "when are you available" (question, not stating availability)
+- "I'll check my calendar" (not confirming a time)
+
+Important rules:
+1. Calculate the actual date based on current date: ${new Date().toLocaleDateString()}
+2. If someone says "Friday" assume they mean the next upcoming Friday
+3. If someone says "tomorrow" calculate tomorrow's date
+4. If no year specified, assume current year: ${new Date().getFullYear()}
+5. Parse duration carefully from the text
+6. Parse time zone carefully - look for common abbreviations and zone names
+7. When time zone is uncertain, flag for confirmation
+8. For times like "9am friday", "2pm tuesday", etc. - these are valid confirmations but may need time zone clarification
+
+Return only the JSON object, no other text.`;
 
       try {
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -2118,7 +2217,7 @@ Return only the JSON object.`;
           body: JSON.stringify({
             model: 'gpt-4',
             messages: [{ role: 'user', content: prompt }],
-            max_tokens: 200,
+            max_tokens: 300,
             temperature: 0.1
           })
         });
@@ -2127,6 +2226,8 @@ Return only the JSON object.`;
           const data = await response.json();
           const content = data.choices[0].message.content.trim();
           
+          console.log('📅 [CALENDAR] OpenAI response:', content);
+          
           try {
             const parsed = JSON.parse(content);
             
@@ -2134,13 +2235,23 @@ Return only the JSON object.`;
               const startTime = new Date(parsed.dateTime);
               const endTime = new Date(startTime.getTime() + (parsed.duration || 30) * 60000);
               
+              console.log('📅 [CALENDAR] AI parsed meeting time successfully:', {
+                originalText: parsed.originalText,
+                startTime: startTime.toISOString(),
+                endTime: endTime.toISOString(),
+                confidence: parsed.confidence
+              });
+              
               return {
                 found: true,
                 startTime: startTime.toISOString(),
                 endTime: endTime.toISOString(),
                 timeZone: parsed.timeZone || 'America/New_York',
                 confidence: parsed.confidence || 'medium',
-                source: 'AI_parsed'
+                source: 'AI_parsed',
+                originalText: parsed.originalText,
+                timeZoneSpecified: parsed.timeZoneSpecified || false,
+                suggestTimeZoneConfirmation: parsed.suggestTimeZoneConfirmation || false
               };
             }
           } catch (parseError) {
@@ -2154,33 +2265,88 @@ Return only the JSON object.`;
     
     // Fallback: Basic regex parsing for common patterns
     const patterns = [
-      /(?:tomorrow|today)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      /(monday|tuesday|wednesday|thursday|friday)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday)/i
+      { 
+        regex: /(?:tomorrow|today)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+        type: 'relative_day'
+      },
+      { 
+        regex: /(monday|tuesday|wednesday|thursday|friday)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+        type: 'weekday_at'
+      },
+      { 
+        regex: /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday)/i,
+        type: 'time_on_weekday'
+      },
+      { 
+        regex: /(\d{1,2})\s*(am|pm)\s+(this|next)\s+(monday|tuesday|wednesday|thursday|friday)/i,
+        type: 'time_this_weekday'
+      }
     ];
     
-    for (const pattern of patterns) {
-      const match = emailBody.match(pattern);
+    for (const patternObj of patterns) {
+      const match = emailBody.match(patternObj.regex);
       if (match) {
-        console.log('📅 [CALENDAR] Found time pattern:', match[0]);
+        console.log('📅 [CALENDAR] Found time pattern:', match[0], 'Type:', patternObj.type);
         
-        // Basic time parsing (simplified - in production you'd want more robust parsing)
+        // Parse the time based on pattern type
         const now = new Date();
         let meetingDate = new Date(now);
+        let hour, minutes = 0, ampm, dayName;
         
-        // Set to tomorrow if "tomorrow" detected
-        if (match[0].toLowerCase().includes('tomorrow')) {
-          meetingDate.setDate(now.getDate() + 1);
+        switch (patternObj.type) {
+          case 'relative_day':
+            hour = parseInt(match[1]);
+            minutes = parseInt(match[2] || 0);
+            ampm = match[3].toLowerCase();
+            if (match[0].toLowerCase().includes('tomorrow')) {
+              meetingDate.setDate(now.getDate() + 1);
+            }
+            break;
+            
+          case 'weekday_at':
+            dayName = match[1].toLowerCase();
+            hour = parseInt(match[2]);
+            minutes = parseInt(match[3] || 0);
+            ampm = match[4].toLowerCase();
+            break;
+            
+          case 'time_on_weekday':
+            hour = parseInt(match[1]);
+            minutes = parseInt(match[2] || 0);
+            ampm = match[3].toLowerCase();
+            dayName = match[4].toLowerCase();
+            break;
+            
+          case 'time_this_weekday':
+            hour = parseInt(match[1]);
+            ampm = match[2].toLowerCase();
+            dayName = match[4].toLowerCase();
+            break;
         }
         
-        // Extract hour and convert to 24-hour format
-        let hour = parseInt(match[1] || match[2]);
-        const ampm = (match[3] || match[4] || '').toLowerCase();
-        
+        // Convert to 24-hour format
         if (ampm === 'pm' && hour !== 12) hour += 12;
         if (ampm === 'am' && hour === 12) hour = 0;
         
-        meetingDate.setHours(hour, 0, 0, 0);
+        // Handle weekday calculation
+        if (dayName) {
+          const daysMap = {
+            'monday': 1, 'tuesday': 2, 'wednesday': 3, 
+            'thursday': 4, 'friday': 5, 'saturday': 6, 'sunday': 0
+          };
+          
+          const targetDay = daysMap[dayName];
+          const currentDay = now.getDay();
+          let daysToAdd = targetDay - currentDay;
+          
+          if (daysToAdd <= 0) {
+            daysToAdd += 7; // Next week
+          }
+          
+          meetingDate.setDate(now.getDate() + daysToAdd);
+        }
+        
+        meetingDate.setHours(hour, minutes, 0, 0);
         
         const endTime = new Date(meetingDate.getTime() + 30 * 60000); // 30 minute default
         
