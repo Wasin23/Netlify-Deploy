@@ -89,7 +89,7 @@ exports.handler = async function(event, context) {
     console.log('[NETLIFY WEBHOOK] From:', formData.From || formData.from || formData.sender);
     console.log('[NETLIFY WEBHOOK] Subject:', formData.Subject || formData.subject);
     
-    // Extract email data
+    // Extract email data with comprehensive header field mapping
     const emailData = {
       id: Date.now() + '-' + Math.random().toString(36).substr(2, 9),
       timestamp: new Date().toISOString(),
@@ -98,10 +98,21 @@ exports.handler = async function(event, context) {
       subject: formData.Subject || formData.subject,
       body: formData['body-plain'] || formData['stripped-text'] || '',
       bodyHtml: formData['body-html'] || formData['stripped-html'] || '',
-      messageId: formData['Message-Id'] || formData['message-id'],
-      references: formData.References || formData.references,
-      inReplyTo: formData['In-Reply-To'] || formData['in-reply-to']
+      // Try all possible Message-ID field variations
+      messageId: formData['Message-Id'] || formData['message-id'] || formData['Message-ID'] || formData.MessageId,
+      // Try all possible References field variations
+      references: formData.References || formData.references || formData['References'] || formData['references'],
+      // Try all possible In-Reply-To field variations
+      inReplyTo: formData['In-Reply-To'] || formData['in-reply-to'] || formData['InReplyTo'] || formData.InReplyTo
     };
+
+    // Debug log all form data keys to identify actual header field names
+    console.log('[NETLIFY WEBHOOK] All form data keys:', Object.keys(formData));
+    console.log('[NETLIFY WEBHOOK] Message threading data:', {
+      messageId: emailData.messageId,
+      references: emailData.references,
+      inReplyTo: emailData.inReplyTo
+    });
 
     console.log('[NETLIFY WEBHOOK] Reply received from:', emailData.from);
     console.log('[NETLIFY WEBHOOK] Body preview:', emailData.body?.substring(0, 100));
@@ -951,36 +962,24 @@ Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
       const messageId = `<ai-response-${trackingId}-${Date.now()}@${process.env.MAILGUN_DOMAIN}>`;
       params.append('h:Message-ID', messageId);
       
-      // Use the actual Message-ID from the incoming email for proper threading
+      // For proper threading, we need to reference the original outbound email's Message-ID
+      // The original outbound email should have had Message-ID: <tracking-${trackingId}@${domain}>
+      const originalOutboundMessageId = `<tracking-${trackingId}@${process.env.MAILGUN_DOMAIN}>`;
+      
+      // Use the actual Message-ID from the incoming reply if available
       const incomingMessageId = originalEmailData.messageId;
       
       if (incomingMessageId) {
-        // Reply to the actual incoming message
+        // Reply to the incoming message and reference the original thread
         params.append('h:In-Reply-To', incomingMessageId);
         
-        // Build References chain: original thread + this message
-        const existingReferences = originalEmailData.references || '';
-        const referencesChain = existingReferences 
-          ? `${existingReferences} ${incomingMessageId}`
-          : incomingMessageId;
+        // References should include: original outbound message + incoming reply
+        const referencesChain = `${originalOutboundMessageId} ${incomingMessageId}`;
         params.append('h:References', referencesChain);
-        
-        console.log('[AUTO RESPONSE] Adding threading headers:', {
-          messageId,
-          inReplyTo: incomingMessageId,
-          references: referencesChain
-        });
       } else {
-        // Fallback: try to reference the original tracking email
-        const originalMessageId = `<tracking-${trackingId}@${process.env.MAILGUN_DOMAIN}>`;
-        params.append('h:In-Reply-To', originalMessageId);
-        params.append('h:References', originalMessageId);
-        
-        console.log('[AUTO RESPONSE] Using fallback tracking headers:', {
-          messageId,
-          inReplyTo: originalMessageId,
-          references: originalMessageId
-        });
+        // Fallback: reference the original outbound email directly
+        params.append('h:In-Reply-To', originalOutboundMessageId);
+        params.append('h:References', originalOutboundMessageId);
       }
     }
     
