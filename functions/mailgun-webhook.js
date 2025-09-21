@@ -134,12 +134,23 @@ exports.handler = async function(event, context) {
       
       // Generate AI response suggestion first (now with user-specific settings)
       try {
+        console.log('🔍 [DEBUG] About to call generateAIResponse for user:', userId);
         aiResponse = await generateAIResponse(emailData, userId);
+        console.log('🔍 [DEBUG] generateAIResponse completed. Result:', {
+          success: aiResponse?.success,
+          hasResponse: !!aiResponse?.response,
+          hasIntent: !!aiResponse?.intent,
+          intent: aiResponse?.intent,
+          responsePreview: aiResponse?.response?.substring(0, 100) + '...',
+          allKeys: Object.keys(aiResponse || {})
+        });
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
         
         // Check if we should automatically create a calendar event FIRST
         console.log('📧 [NETLIFY WEBHOOK] Checking for calendar event creation...');
-        console.log('📧 [NETLIFY WEBHOOK] AI Response object:', {
+        console.log('� [DEBUG] Calendar check - aiResponse type:', typeof aiResponse);
+        console.log('🔍 [DEBUG] Calendar check - aiResponse is null/undefined:', aiResponse == null);
+        console.log('�📧 [NETLIFY WEBHOOK] AI Response object:', {
           success: aiResponse?.success,
           hasResponse: !!aiResponse?.response,
           intent: aiResponse?.intent,
@@ -147,7 +158,12 @@ exports.handler = async function(event, context) {
         });
         
         let calendarEvent = null;
-        if (aiResponse.intent) {
+        console.log('🔍 [DEBUG] Checking if aiResponse.intent exists...');
+        console.log('🔍 [DEBUG] aiResponse.intent value:', aiResponse?.intent);
+        console.log('🔍 [DEBUG] aiResponse.intent type:', typeof aiResponse?.intent);
+        console.log('🔍 [DEBUG] aiResponse.intent truthy?', !!aiResponse?.intent);
+        
+        if (aiResponse && aiResponse.intent) {
           console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
           console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
           try {
@@ -482,13 +498,16 @@ async function getCalendarIdFromSettings(userId = 'default') {
     let agentSettings = {};
     try {
       agentSettings = await loadAgentSettings(userId);
+      console.log('[SETTINGS] Agent settings loaded successfully, keys:', Object.keys(agentSettings));
       console.log('[SETTINGS] Looking for calendar_id field...');
+      console.log('[SETTINGS] calendar_id value:', agentSettings.calendar_id);
       
       if (agentSettings.calendar_id) {
         console.log('[SETTINGS] Found calendar ID in agent settings:', agentSettings.calendar_id);
         return agentSettings.calendar_id;
       } else {
         console.log('[SETTINGS] No calendar_id field found in settings');
+        console.log('[SETTINGS] Available settings fields:', Object.keys(agentSettings));
       }
     } catch (error) {
       console.log('[SETTINGS] Could not load agent settings for calendar ID:', error);
@@ -496,7 +515,8 @@ async function getCalendarIdFromSettings(userId = 'default') {
     
     // Fallback to environment variable
     const calendarId = process.env.GOOGLE_CALENDAR_ID;
-    console.log('[SETTINGS] Using fallback calendar ID from environment');
+    console.log('[SETTINGS] Using fallback calendar ID from environment:', calendarId);
+    console.log('[SETTINGS] Environment variable GOOGLE_CALENDAR_ID exists:', !!process.env.GOOGLE_CALENDAR_ID);
     return calendarId;
   } catch (error) {
     console.error('[SETTINGS] Error fetching calendar ID:', error);
