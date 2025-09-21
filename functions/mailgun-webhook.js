@@ -354,6 +354,34 @@ async function createEmbedding(text) {
   }
 }
 
+// Fetch timezone from lead agent settings
+async function getTimezoneFromSettings() {
+  try {
+    console.log('[SETTINGS] Fetching timezone from lead agent settings...');
+    
+    // Try to load settings from the same source as agent settings
+    let agentSettings = {};
+    try {
+      agentSettings = await loadAgentSettings();
+      if (agentSettings.timezone) {
+        console.log('[SETTINGS] Found timezone in agent settings:', agentSettings.timezone);
+        return agentSettings.timezone;
+      }
+    } catch (error) {
+      console.log('[SETTINGS] Could not load agent settings for timezone:', error);
+    }
+    
+    // Fallback to environment variable or default
+    const timezone = process.env.DEFAULT_TIMEZONE || 'America/New_York';
+    
+    console.log('[SETTINGS] Using fallback timezone:', timezone);
+    return timezone;
+  } catch (error) {
+    console.error('[SETTINGS] Error fetching timezone:', error);
+    return 'America/New_York'; // Fallback to EST
+  }
+}
+
 // Enhanced function to store reply in Zilliz with better error handling
 async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
@@ -1282,13 +1310,16 @@ function applyTemplateSubstitutions(template, variables) {
 
 // Enhance template response with AI for better personalization
 async function enhanceResponseWithAI(templateResponse, emailData, intent, sentiment, settings) {
-  // First, check if this email contains a meeting time that needs timezone confirmation
+  // First, get the timezone from settings
+  const defaultTimezone = await getTimezoneFromSettings();
+  
+  // Then, check if this email contains a meeting time that needs timezone confirmation
   let timeZoneConfirmationNeeded = false;
   let meetingDetails = null;
   
   if (intent === 'meeting_request_positive' || intent === 'meeting_time_preference') {
     try {
-      meetingDetails = await detectConfirmedMeetingTime(emailData.body, intent);
+      meetingDetails = await detectConfirmedMeetingTime(emailData.body, intent, defaultTimezone);
       if (meetingDetails.found && meetingDetails.suggestTimeZoneConfirmation) {
         timeZoneConfirmationNeeded = true;
       }
@@ -1308,6 +1339,7 @@ ORIGINAL EMAIL CONTEXT:
 - Their Message: "${emailData.body}"
 - Intent: ${intent}
 - Sentiment: ${sentiment}
+- Default Timezone: ${defaultTimezone}
 
 ${timeZoneConfirmationNeeded ? `
 IMPORTANT TIMEZONE REQUIREMENT:
@@ -2116,9 +2148,10 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
 }
 
 // Detect confirmed meeting times in email content using AI
-async function detectConfirmedMeetingTime(emailBody, intent) {
+async function detectConfirmedMeetingTime(emailBody, intent, defaultTimezone = 'America/New_York') {
   try {
     console.log('📅 [CALENDAR] Analyzing email content for meeting times...');
+    console.log('📅 [CALENDAR] Using default timezone:', defaultTimezone);
     
     // Quick keyword check first
     const emailLower = emailBody.toLowerCase();
@@ -2159,7 +2192,7 @@ Time Zone Detection Rules:
 - Common abbreviations: EST/EDT, PST/PDT, CST/CDT, MST/MDT, UTC, GMT
 - If NO time zone specified, set "timeZoneSpecified": false and "suggestTimeZoneConfirmation": true
 - If time zone IS specified, set "timeZoneSpecified": true and "suggestTimeZoneConfirmation": false
-- Default to "America/New_York" but flag when uncertain
+- Default to "${defaultTimezone}" but flag when uncertain
 
 Duration parsing rules:
 - Look for explicit durations: "15 minutes", "30 minutes", "1 hour", "2 hours", "45 minutes"
@@ -2246,7 +2279,7 @@ Return only the JSON object, no other text.`;
                 found: true,
                 startTime: startTime.toISOString(),
                 endTime: endTime.toISOString(),
-                timeZone: parsed.timeZone || 'America/New_York',
+                timeZone: parsed.timeZone || defaultTimezone,
                 confidence: parsed.confidence || 'medium',
                 source: 'AI_parsed',
                 originalText: parsed.originalText,
