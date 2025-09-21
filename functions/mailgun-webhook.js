@@ -138,7 +138,7 @@ exports.handler = async function(event, context) {
               console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
               console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
               try {
-                const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
+                const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId, userId);
                 console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
                 if (calendarResult.eventCreated) {
                   console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
@@ -406,9 +406,14 @@ async function getTimezoneFromSettings(userId = 'default') {
     let agentSettings = {};
     try {
       agentSettings = await loadAgentSettings(userId);
+      console.log('[SETTINGS] All available settings:', Object.keys(agentSettings));
+      console.log('[SETTINGS] Looking for timezone field...');
+      
       if (agentSettings.timezone) {
         console.log('[SETTINGS] Found timezone in agent settings:', agentSettings.timezone);
         return agentSettings.timezone;
+      } else {
+        console.log('[SETTINGS] No timezone field found in settings');
       }
     } catch (error) {
       console.log('[SETTINGS] Could not load agent settings for timezone:', error);
@@ -1028,7 +1033,7 @@ async function loadAgentSettings(userId = 'default') {
     // Query all settings for the user
     const searchResult = await client.search({
       collection_name: 'agent_settings',
-      vector: [0], // Dummy vector since we're using filter
+      vector: [0.1, 0.2], // Dummy vector since we're using filter
       limit: 100,
       filter: `user_id == "${userId}"`
     });
@@ -2135,7 +2140,7 @@ async function storeLeadMessage(emailData, trackingId) {
 }
 
 // Smart Calendar Event Creation - Automatically creates calendar events when appropriate
-async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
+async function handleCalendarEventCreation(emailData, aiResponse, trackingId, userId = 'default') {
   try {
     console.log('📅 [CALENDAR] Analyzing email for automatic calendar event creation...');
     
@@ -2148,8 +2153,12 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
       return { eventCreated: false, reason: 'Google Calendar Service Account not configured' };
     }
     
+    // Get user's timezone setting for calendar events
+    const userTimezone = await getTimezoneFromSettings(userId);
+    console.log('📅 [CALENDAR] Using user timezone for calendar:', userTimezone);
+    
     // Check if this email contains a confirmed meeting time
-    const meetingTimeDetected = await detectConfirmedMeetingTime(emailBody, intent);
+    const meetingTimeDetected = await detectConfirmedMeetingTime(emailBody, intent, userTimezone);
     
     if (!meetingTimeDetected.found) {
       console.log('📅 [CALENDAR] No confirmed meeting time detected, skipping event creation');
@@ -2167,7 +2176,7 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
       description: `Automatic meeting scheduled via AI email responder\n\nLead: ${leadInfo.name}\nEmail: ${emailData.from}\nCompany: ${leadInfo.company}\n\nTime Zone: ${meetingTimeDetected.timeZone}${meetingTimeDetected.timeZoneSpecified ? ' (confirmed)' : ' (assumed - please confirm)'}\n\nOriginal message:\n${emailBody.substring(0, 300)}...`,
       startTime: meetingTimeDetected.startTime,
       endTime: meetingTimeDetected.endTime,
-      timeZone: meetingTimeDetected.timeZone || 'America/New_York',
+      timeZone: userTimezone, // Use the user's timezone for the calendar event
       attendees: [
         { email: emailData.from, displayName: leadInfo.name }
       ],
