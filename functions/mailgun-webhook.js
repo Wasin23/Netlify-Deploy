@@ -253,18 +253,33 @@ function extractTrackingId(formData, subject, body) {
   const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
   if (inReplyTo) {
     console.log('[EXTRACT] Checking In-Reply-To for AI response Message-ID:', inReplyTo);
-    // Look for our AI response pattern: <ai-response-TRACKINGID-timestamp@domain>
-    const aiResponseMatch = inReplyTo.match(/<ai-response-([a-f0-9]{32})-\d+@/);
-    if (aiResponseMatch) {
-      console.log('[EXTRACT] Found tracking ID in AI response Message-ID:', aiResponseMatch[1]);
-      return aiResponseMatch[1];
+    
+    // Look for NEW format AI response pattern: <ai-response-userId_timestamp_hash-timestamp@domain>
+    const newAiResponseMatch = inReplyTo.match(/<ai-response-([^-]+_[^-]+_[^-]+)-\d+@/);
+    if (newAiResponseMatch) {
+      console.log('[EXTRACT] Found NEW format tracking ID in AI response Message-ID:', newAiResponseMatch[1]);
+      return newAiResponseMatch[1];
     }
     
-    // Look for original tracking pattern: <tracking-TRACKINGID@domain>
-    const trackingMatch = inReplyTo.match(/<tracking-([a-f0-9]{32})@/);
-    if (trackingMatch) {
-      console.log('[EXTRACT] Found tracking ID in original Message-ID:', trackingMatch[1]);
-      return trackingMatch[1];
+    // Look for OLD format AI response pattern: <ai-response-TRACKINGID-timestamp@domain>
+    const oldAiResponseMatch = inReplyTo.match(/<ai-response-([a-f0-9]{32})-\d+@/);
+    if (oldAiResponseMatch) {
+      console.log('[EXTRACT] Found OLD format tracking ID in AI response Message-ID:', oldAiResponseMatch[1]);
+      return oldAiResponseMatch[1];
+    }
+    
+    // Look for NEW format original tracking pattern: <tracking-userId_timestamp_hash@domain>
+    const newTrackingMatch = inReplyTo.match(/<tracking-([^@]+_[^@]+_[^@]+)@/);
+    if (newTrackingMatch) {
+      console.log('[EXTRACT] Found NEW format tracking ID in original Message-ID:', newTrackingMatch[1]);
+      return newTrackingMatch[1];
+    }
+    
+    // Look for OLD format original tracking pattern: <tracking-TRACKINGID@domain>
+    const oldTrackingMatch = inReplyTo.match(/<tracking-([a-f0-9]{32})@/);
+    if (oldTrackingMatch) {
+      console.log('[EXTRACT] Found OLD format tracking ID in original Message-ID:', oldTrackingMatch[1]);
+      return oldTrackingMatch[1];
     }
   }
 
@@ -272,26 +287,51 @@ function extractTrackingId(formData, subject, body) {
   const references = formData.References || formData.references;
   if (references) {
     console.log('[EXTRACT] Checking References header:', references);
-    // Look for our AI response pattern first
-    const aiResponseMatch = references.match(/<ai-response-([a-f0-9]{32})-\d+@/);
-    if (aiResponseMatch) {
-      console.log('[EXTRACT] Found tracking ID in References AI response:', aiResponseMatch[1]);
-      return aiResponseMatch[1];
+    
+    // Look for NEW format AI response pattern first
+    const newAiResponseMatch = references.match(/<ai-response-([^-]+_[^-]+_[^-]+)-\d+@/);
+    if (newAiResponseMatch) {
+      console.log('[EXTRACT] Found NEW format tracking ID in References AI response:', newAiResponseMatch[1]);
+      return newAiResponseMatch[1];
     }
     
-    // Look for original tracking pattern
-    const trackingMatch = references.match(/<tracking-([a-f0-9]{32})@/);
-    if (trackingMatch) {
-      console.log('[EXTRACT] Found tracking ID in References original:', trackingMatch[1]);
-      return trackingMatch[1];
+    // Look for OLD format AI response pattern
+    const oldAiResponseMatch = references.match(/<ai-response-([a-f0-9]{32})-\d+@/);
+    if (oldAiResponseMatch) {
+      console.log('[EXTRACT] Found OLD format tracking ID in References AI response:', oldAiResponseMatch[1]);
+      return oldAiResponseMatch[1];
+    }
+    
+    // Look for NEW format original tracking pattern
+    const newTrackingMatch = references.match(/<tracking-([^@]+_[^@]+_[^@]+)@/);
+    if (newTrackingMatch) {
+      console.log('[EXTRACT] Found NEW format tracking ID in References original:', newTrackingMatch[1]);
+      return newTrackingMatch[1];
+    }
+    
+    // Look for OLD format original tracking pattern
+    const oldTrackingMatch = references.match(/<tracking-([a-f0-9]{32})@/);
+    if (oldTrackingMatch) {
+      console.log('[EXTRACT] Found OLD format tracking ID in References original:', oldTrackingMatch[1]);
+      return oldTrackingMatch[1];
     }
   }
   
   // Method 3: Look for tracking ID in subject line [TRACKINGID] or Track_ID patterns
-  const subjectMatch32 = subject?.match(/\[([a-f0-9]{32})\]/);
-  if (subjectMatch32) {
-    console.log('[EXTRACT] Found 32-char tracking ID in subject:', subjectMatch32[1]);
-    return subjectMatch32[1];
+  
+  // Check for NEW format in subject: [userId_timestamp_hash] or (ID: userId_timestamp_hash)
+  const subjectNewMatch = subject?.match(/\[([^_]+_[^_]+_[^\]]+)\]|ID:\s*([^_]+_[^_]+_[^\)]+)\)/);
+  if (subjectNewMatch) {
+    const trackingId = subjectNewMatch[1] || subjectNewMatch[2];
+    console.log('[EXTRACT] Found NEW format tracking ID in subject:', trackingId);
+    return trackingId;
+  }
+  
+  // Check for OLD format in subject: [32-char hex]
+  const subjectOldMatch = subject?.match(/\[([a-f0-9]{32})\]/);
+  if (subjectOldMatch) {
+    console.log('[EXTRACT] Found OLD format tracking ID in subject:', subjectOldMatch[1]);
+    return subjectOldMatch[1];
   }
   
   // Also check for Track_ patterns for testing purposes
@@ -312,18 +352,36 @@ function extractTrackingId(formData, subject, body) {
   const recipient = formData.recipient || formData.To || formData.to;
   if (recipient) {
     console.log('[EXTRACT] Checking recipient:', recipient);
-    const emailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
-    if (emailMatch) {
-      console.log('[EXTRACT] Found tracking ID in recipient:', emailMatch[1]);
-      return emailMatch[1];
+    
+    // Check for NEW format in recipient
+    const newEmailMatch = recipient.match(/tracking-([^@]+_[^@]+_[^@]+)@/);
+    if (newEmailMatch) {
+      console.log('[EXTRACT] Found NEW format tracking ID in recipient:', newEmailMatch[1]);
+      return newEmailMatch[1];
+    }
+    
+    // Check for OLD format in recipient
+    const oldEmailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
+    if (oldEmailMatch) {
+      console.log('[EXTRACT] Found OLD format tracking ID in recipient:', oldEmailMatch[1]);
+      return oldEmailMatch[1];
     }
   }
   
   // Method 5: Look for tracking ID in body text
-  const bodyMatch = body?.match(/Message ID:\s*([a-f0-9]{32})/i);
-  if (bodyMatch) {
-    console.log('[EXTRACT] Found tracking ID in body Message ID:', bodyMatch[1]);
-    return bodyMatch[1];
+  
+  // Check for NEW format in body: Message ID: userId_timestamp_hash
+  const newBodyMatch = body?.match(/Message ID:\s*([^_\s]+_[^_\s]+_[^\s]+)/i);
+  if (newBodyMatch) {
+    console.log('[EXTRACT] Found NEW format tracking ID in body Message ID:', newBodyMatch[1]);
+    return newBodyMatch[1];
+  }
+  
+  // Check for OLD format in body: Message ID: 32-char hex
+  const oldBodyMatch = body?.match(/Message ID:\s*([a-f0-9]{32})/i);
+  if (oldBodyMatch) {
+    console.log('[EXTRACT] Found OLD format tracking ID in body Message ID:', oldBodyMatch[1]);
+    return oldBodyMatch[1];
   }
   
   console.log('[EXTRACT] No tracking ID found in any location');
