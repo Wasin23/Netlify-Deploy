@@ -7,27 +7,6 @@ const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 // Import local calendar manager
 const { calendarManager } = require('./calendarIntegrationManager');
 
-// Helper function for fetch with timeout to prevent 504 Gateway Timeout
-async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      throw new Error(`Request timeout after ${timeoutMs}ms`);
-    }
-    throw error;
-  }
-}
-
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -142,76 +121,61 @@ exports.handler = async function(event, context) {
       emailData.originalTrackingId = trackingId;
       emailData.userId = userId; // Add user ID to email data
       
-      // FAST WEBHOOK: Generate AI response and queue background tasks
-      console.log('🚀 [FAST WEBHOOK] Generating AI response and queuing background tasks');
-      
       // Generate AI response suggestion first (now with user-specific settings)
       try {
         aiResponse = await generateAIResponse(emailData, userId);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
         
-        // Handle calendar integration immediately (this is fast)
-        if (aiResponse.intent) {
-          console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
-          console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
+        // Automatically send the AI response back to the customer
+        if (aiResponse && aiResponse.success && aiResponse.response) {
           try {
-            const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
-            console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
-            if (calendarResult.eventCreated) {
-              console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
-              aiResponse.calendarEvent = calendarResult;
+            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
+            aiResponse.emailSent = emailSent;
+            console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
+            
+            // Check if we should automatically create a calendar event
+            if (aiResponse.intent) {
+              console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
+              console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
+              try {
+                const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
+                console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
+                if (calendarResult.eventCreated) {
+                  console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
+                  aiResponse.calendarEvent = calendarResult;
+                } else {
+                  console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
+                  aiResponse.calendarEvent = calendarResult;
+                }
+              } catch (calendarError) {
+                console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
+                aiResponse.calendarEvent = { success: false, error: calendarError.message };
+              }
             } else {
-              console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
-              aiResponse.calendarEvent = calendarResult;
+              console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
             }
-          } catch (calendarError) {
-            console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
-            aiResponse.calendarEvent = { success: false, error: calendarError.message };
+          } catch (emailError) {
+            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
+            aiResponse.emailSent = { success: false, error: emailError.message };
           }
-        } else {
-          console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
         }
-        
-        // Queue email sending task (background processing)
-        const emailTask = await queueEmailTask(emailData, aiResponse, trackingId);
-        console.log('📧 [FAST WEBHOOK] Email task queued:', emailTask.success);
-        aiResponse.emailSent = { success: true, message: "Email queued for background processing", taskId: emailTask.taskId };
-        
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
         aiResponse = { error: error.message };
       }
-      
-      // FAST WEBHOOK: Queue storage operations for background processing
-      console.log('⚡ [FAST WEBHOOK] Queueing storage operations for background processing');
+
+      // Store lead message first, then AI response
       try {
-        // Queue the lead's original message for storage
-        const leadMessageQueueResult = await queueStorageTask('lead_message', {
-          emailData,
-          trackingId,
-          messageType: 'lead_message'
-        });
-        console.log('� [NETLIFY WEBHOOK] Lead message queued for storage:', leadMessageQueueResult);
+        // Store the lead's original message
+        const leadMessageResult = await storeLeadMessage(emailData, trackingId);
+        console.log('💬 [NETLIFY WEBHOOK] Lead message stored:', leadMessageResult);
         
-        // Queue AI response for storage
-        const aiResponseQueueResult = await queueStorageTask('ai_response', {
-          emailData,
-          trackingId,
-          aiResponse,
-          messageType: 'ai_response'
-        });
-        console.log('� [NETLIFY WEBHOOK] AI response queued for storage:', aiResponseQueueResult);
-        
-        zillizResult = { 
-          success: true, 
-          queued: true,
-          leadMessageTaskId: leadMessageQueueResult.taskId,
-          aiResponseTaskId: aiResponseQueueResult.taskId,
-          message: 'Storage operations queued for background processing'
-        };
+        // Store AI response
+        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
+        console.log('💬 [NETLIFY WEBHOOK] AI response stored:', zillizResult);
       } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to queue storage operations:', error);
-        zillizResult = { error: error.message, success: false, queued: false };
+        console.error('❌ [NETLIFY WEBHOOK] Failed to store conversation in Zilliz:', error);
+        zillizResult = { error: error.message, success: false };
       }
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
@@ -289,19 +253,18 @@ function extractTrackingId(formData, subject, body) {
   const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
   if (inReplyTo) {
     console.log('[EXTRACT] Checking In-Reply-To for AI response Message-ID:', inReplyTo);
-    
-    // Look for NEW format AI response pattern: <ai-response-userId_timestamp_hash-timestamp@domain>
-    const newAiResponseMatch = inReplyTo.match(/<ai-response-([a-zA-Z0-9_-]+)-\d+@/);
-    if (newAiResponseMatch) {
-      console.log('[EXTRACT] Found NEW format tracking ID in AI response Message-ID:', newAiResponseMatch[1]);
-      return newAiResponseMatch[1];
+    // Look for our AI response pattern: <ai-response-TRACKINGID-timestamp@domain>
+    const aiResponseMatch = inReplyTo.match(/<ai-response-([a-f0-9]{32})-\d+@/);
+    if (aiResponseMatch) {
+      console.log('[EXTRACT] Found tracking ID in AI response Message-ID:', aiResponseMatch[1]);
+      return aiResponseMatch[1];
     }
     
-    // Look for NEW format original tracking pattern: <tracking-userId_timestamp_hash@domain>
-    const newTrackingMatch = inReplyTo.match(/<tracking-([a-zA-Z0-9_-]+)@/);
-    if (newTrackingMatch) {
-      console.log('[EXTRACT] Found NEW format tracking ID in original Message-ID:', newTrackingMatch[1]);
-      return newTrackingMatch[1];
+    // Look for original tracking pattern: <tracking-TRACKINGID@domain>
+    const trackingMatch = inReplyTo.match(/<tracking-([a-f0-9]{32})@/);
+    if (trackingMatch) {
+      console.log('[EXTRACT] Found tracking ID in original Message-ID:', trackingMatch[1]);
+      return trackingMatch[1];
     }
   }
 
@@ -309,37 +272,26 @@ function extractTrackingId(formData, subject, body) {
   const references = formData.References || formData.references;
   if (references) {
     console.log('[EXTRACT] Checking References header:', references);
-    
-    // Look for NEW format AI response pattern first
-    const newAiResponseMatch = references.match(/<ai-response-([a-zA-Z0-9_-]+)-\d+@/);
-    if (newAiResponseMatch) {
-      console.log('[EXTRACT] Found NEW format tracking ID in References AI response:', newAiResponseMatch[1]);
-      return newAiResponseMatch[1];
+    // Look for our AI response pattern first
+    const aiResponseMatch = references.match(/<ai-response-([a-f0-9]{32})-\d+@/);
+    if (aiResponseMatch) {
+      console.log('[EXTRACT] Found tracking ID in References AI response:', aiResponseMatch[1]);
+      return aiResponseMatch[1];
     }
     
-    // Look for OLD format AI response pattern
-    const oldAiResponseMatch = references.match(/<ai-response-([a-f0-9]{32})-\d+@/);
-    if (oldAiResponseMatch) {
-      console.log('[EXTRACT] Found OLD format tracking ID in References AI response:', oldAiResponseMatch[1]);
-      return oldAiResponseMatch[1];
-    }
-    
-    // Look for NEW format original tracking pattern
-    const newTrackingMatch = references.match(/<tracking-([a-zA-Z0-9_-]+)@/);
-    if (newTrackingMatch) {
-      console.log('[EXTRACT] Found NEW format tracking ID in References original:', newTrackingMatch[1]);
-      return newTrackingMatch[1];
+    // Look for original tracking pattern
+    const trackingMatch = references.match(/<tracking-([a-f0-9]{32})@/);
+    if (trackingMatch) {
+      console.log('[EXTRACT] Found tracking ID in References original:', trackingMatch[1]);
+      return trackingMatch[1];
     }
   }
   
   // Method 3: Look for tracking ID in subject line [TRACKINGID] or Track_ID patterns
-  
-  // Check for NEW format in subject: [userId_timestamp_hash] or (ID: userId_timestamp_hash)
-  const subjectNewMatch = subject?.match(/\[([a-zA-Z0-9_-]+)\]|\(ID:\s*([a-zA-Z0-9_-]+)\)/);
-  if (subjectNewMatch) {
-    const trackingId = subjectNewMatch[1] || subjectNewMatch[2];
-    console.log('[EXTRACT] Found NEW format tracking ID in subject:', trackingId);
-    return trackingId;
+  const subjectMatch32 = subject?.match(/\[([a-f0-9]{32})\]/);
+  if (subjectMatch32) {
+    console.log('[EXTRACT] Found 32-char tracking ID in subject:', subjectMatch32[1]);
+    return subjectMatch32[1];
   }
   
   // Also check for Track_ patterns for testing purposes
@@ -360,22 +312,18 @@ function extractTrackingId(formData, subject, body) {
   const recipient = formData.recipient || formData.To || formData.to;
   if (recipient) {
     console.log('[EXTRACT] Checking recipient:', recipient);
-    
-    // Check for NEW format in recipient
-    const newEmailMatch = recipient.match(/tracking-([a-zA-Z0-9_-]+)@/);
-    if (newEmailMatch) {
-      console.log('[EXTRACT] Found NEW format tracking ID in recipient:', newEmailMatch[1]);
-      return newEmailMatch[1];
+    const emailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
+    if (emailMatch) {
+      console.log('[EXTRACT] Found tracking ID in recipient:', emailMatch[1]);
+      return emailMatch[1];
     }
   }
   
   // Method 5: Look for tracking ID in body text
-  
-  // Check for NEW format in body: Message ID: userId_timestamp_hash
-  const newBodyMatch = body?.match(/Message ID:\s*([a-zA-Z0-9_-]+)/i);
-  if (newBodyMatch) {
-    console.log('[EXTRACT] Found NEW format tracking ID in body Message ID:', newBodyMatch[1]);
-    return newBodyMatch[1];
+  const bodyMatch = body?.match(/Message ID:\s*([a-f0-9]{32})/i);
+  if (bodyMatch) {
+    console.log('[EXTRACT] Found tracking ID in body Message ID:', bodyMatch[1]);
+    return bodyMatch[1];
   }
   
   console.log('[EXTRACT] No tracking ID found in any location');
@@ -390,7 +338,7 @@ async function createEmbedding(text) {
       return [0.0, 0.0]; // Fallback dummy vector
     }
 
-    const response = await fetchWithTimeout('https://api.openai.com/v1/embeddings', {
+    const response = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -400,7 +348,7 @@ async function createEmbedding(text) {
         input: text,
         model: "text-embedding-ada-002"
       })
-    }, 15000); // 15 second timeout
+    });
 
     if (!response.ok) {
       throw new Error(`OpenAI API error: ${response.status}`);
@@ -622,7 +570,7 @@ IMPORTANT: Only mark as "meeting_booked" if there's a SPECIFIC time/date mention
 Respond with ONLY the JSON object, no other text.`;
 
   try {
-    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -634,7 +582,7 @@ Respond with ONLY the JSON object, no other text.`;
         temperature: 0.1,
         max_tokens: 100
       })
-    }, 20000); // 20 second timeout
+    });
 
     const data = await response.json();
     const analysis = JSON.parse(data.choices[0].message.content.trim());
@@ -979,14 +927,14 @@ Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
       replyTo: shouldKeepConversationOpen ? `ExaMark <${replyAddress}>` : 'none'
     });
 
-    const response = await fetchWithTimeout(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+    const response = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${btoa(`api:${process.env.MAILGUN_API_KEY}`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: params.toString()
-    }, 15000); // 15 second timeout for email sending
+    });
 
     let result;
     try {
@@ -1058,62 +1006,52 @@ async function loadAgentSettings(userId = 'default') {
       return getDefaultSettings();
     }
 
-    // Add timeout to prevent hanging Zilliz calls
-    return await Promise.race([
-      loadAgentSettingsFromZilliz(userId),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Zilliz settings timeout')), 10000)
-      )
-    ]);
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
 
-  } catch (error) {
-    console.error('❌ [SETTINGS] Failed to load from Zilliz:', error.message);
-    return getDefaultSettings();
-  }
-}
+    // Query all settings for the user
+    const searchResult = await client.search({
+      collection_name: 'agent_settings',
+      vector: [0], // Dummy vector since we're using filter
+      limit: 100,
+      filter: `user_id == "${userId}"`
+    });
 
-async function loadAgentSettingsFromZilliz(userId = 'default') {
-  const client = new MilvusClient({
-    address: process.env.ZILLIZ_ENDPOINT,
-    token: process.env.ZILLIZ_TOKEN
-  });
-
-  // Query all settings for the user
-  const searchResult = await client.search({
-    collection_name: 'agent_settings',
-    vector: [0], // Dummy vector since we're using filter
-    limit: 100,
-    filter: `user_id == "${userId}"`
-  });
-
-  const settings = {};
-  if (searchResult.results && searchResult.results.length > 0) {
-    for (const result of searchResult.results) {
-      if (result.user_id === userId) {
-        // Parse setting_value based on setting_type
-        let value;
-        try {
-          if (result.setting_type === 'array' || result.setting_type === 'object') {
-            value = JSON.parse(result.setting_value);
-          } else if (result.setting_type === 'boolean') {
-            value = result.setting_value === 'true';
-          } else if (result.setting_type === 'number') {
-            value = parseFloat(result.setting_value);
-          } else {
-            value = result.setting_value;
+    const settings = {};
+    if (searchResult.results && searchResult.results.length > 0) {
+      for (const result of searchResult.results) {
+        if (result.user_id === userId) {
+          // Parse setting_value based on setting_type
+          let value;
+          try {
+            if (result.setting_type === 'array' || result.setting_type === 'object') {
+              value = JSON.parse(result.setting_value);
+            } else if (result.setting_type === 'boolean') {
+              value = result.setting_value === 'true';
+            } else if (result.setting_type === 'number') {
+              value = parseFloat(result.setting_value);
+            } else {
+              value = result.setting_value;
+            }
+          } catch (parseError) {
+            console.error('❌ [SETTINGS] Parse error for', result.setting_key, parseError);
+            value = result.setting_value; // Fallback to string
           }
-        } catch (parseError) {
-          console.error('❌ [SETTINGS] Parse error for', result.setting_key, parseError);
-          value = result.setting_value; // Fallback to string
+          
+          settings[result.setting_key] = value;
         }
-        
-        settings[result.setting_key] = value;
       }
     }
-  }
 
-  console.log('⚙️ [SETTINGS] Loaded settings from Zilliz:', Object.keys(settings));
-  return Object.keys(settings).length > 0 ? settings : getDefaultSettings();
+    console.log('⚙️ [SETTINGS] Loaded settings from Zilliz:', Object.keys(settings));
+    return Object.keys(settings).length > 0 ? settings : getDefaultSettings();
+
+  } catch (error) {
+    console.error('❌ [SETTINGS] Error loading from Zilliz:', error);
+    return getDefaultSettings();
+  }
 }
 
 // Get default settings when Zilliz is unavailable
@@ -1207,23 +1145,29 @@ async function generateAIResponse(emailData, userId = 'default') {
       agentSettings = getDefaultSettings();
     }
     
-    // Step 2: Extract lead information for personalization
+    // Step 2: Classify intent using OpenAI
+    const intent = await classifyIntentWithAI(emailData.body);
+    console.log('🎯 [SMART AI] Intent classified:', intent);
+    
+    // Step 3: Analyze sentiment
+    const sentiment = await analyzeSentimentWithAI(emailData.body);
+    console.log('💭 [SMART AI] Sentiment analyzed:', sentiment);
+    
+    // Step 4: Extract lead information for personalization
     const leadInfo = extractLeadInfo(emailData);
     console.log('👤 [SMART AI] Lead info extracted:', leadInfo);
     
-    // Step 3: Generate AI response with combined intent detection (SINGLE API CALL)
-    const response = await generateSmartResponseWithIntent(emailData, agentSettings, leadInfo, userId);
-    console.log('🤖 [SMART AI] Combined response generated:', response);
+    // Step 5: Generate context-aware response with template engine
+    const response = await generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo, userId);
     
     return {
       success: true,
-      response: response.text,
-      intent: response.intent,  // Intent from combined response
-      provider: 'Enhanced Smart AI Responder v3.0',
-      analysis: { intent: response.intent, sentiment: 'optimized' }, // Removed sentiment analysis
+      response: response,
+      intent: intent,  // Add intent to the response object for calendar detection
+      provider: 'Enhanced Smart AI Responder v2.0',
+      analysis: { intent, sentiment },
       settings_used: !!agentSettings.company_name,
-      personalization: leadInfo,
-      needsCalendar: response.needsCalendar || false
+      personalization: leadInfo
     };
 
   } catch (error) {
@@ -1268,7 +1212,7 @@ Examples of "meeting_time_preference":
 Respond with just the intent category, nothing else.`;
 
   try {
-    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -1280,7 +1224,7 @@ Respond with just the intent category, nothing else.`;
         temperature: 0.1,
         max_tokens: 50
       })
-    }, 20000); // 20 second timeout
+    });
 
     const data = await response.json();
     return data.choices[0].message.content.trim().toLowerCase();
@@ -1303,7 +1247,7 @@ Classify as one of: positive, negative, neutral, frustrated, excited, interested
 Respond with just the sentiment word, nothing else.`;
 
   try {
-    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -1315,7 +1259,7 @@ Respond with just the sentiment word, nothing else.`;
         temperature: 0.1,
         max_tokens: 20
       })
-    }, 20000); // 20 second timeout
+    });
 
     const data = await response.json();
     return data.choices[0].message.content.trim().toLowerCase();
@@ -1476,95 +1420,6 @@ function applyTemplateSubstitutions(template, variables) {
   return result;
 }
 
-// NEW: Combined AI Response Generation with Intent Detection (SINGLE API CALL)
-async function generateSmartResponseWithIntent(emailData, agentSettings, leadInfo, userId = 'default') {
-  try {
-    console.log('🚀 [FAST AI] Generating combined response with intent detection...');
-    
-    const defaultTimezone = await getTimezoneFromSettings(userId);
-    
-    const combinedPrompt = `You are an AI sales assistant responding to email replies. Analyze the email and provide both a response AND intent classification in a single response.
-
-EMAIL CONTEXT:
-- From: ${emailData.from}
-- Subject: ${emailData.subject}
-- Message: "${emailData.body}"
-- Lead Company: ${leadInfo.company}
-- Lead Name: ${leadInfo.name}
-
-AGENT SETTINGS:
-- Company: ${agentSettings.company_name || 'ExaMark'}
-- Product: ${agentSettings.product_name || 'our solution'}
-- Response Tone: ${agentSettings.response_tone || 'professional'}
-- Calendar Link: ${agentSettings.calendar_link || ''}
-- Default Timezone: ${defaultTimezone}
-
-INSTRUCTIONS:
-1. Classify the intent as ONE of: meeting_request_positive, meeting_request_negative, meeting_time_preference, pricing_question, technical_question, general_positive, general_negative, unsubscribe_request
-2. Generate a personalized email response using the agent settings
-3. Replace generic terms like "Gmail" with the actual company name
-4. Use professional meeting language (avoid casual terms like "chat")
-5. If they mention specific times/dates, ask for timezone confirmation if not specified
-6. Keep response concise and professional
-
-RESPOND WITH THIS EXACT JSON FORMAT:
-{
-  "intent": "classified_intent_here",
-  "text": "Your professional email response here",
-  "needsCalendar": true/false
-}
-
-Example response:
-{
-  "intent": "meeting_request_positive",
-  "text": "Hi [Name],\\n\\nThank you for your interest in [Product]! I'd love to set up a meeting to discuss how [Company] can help [Lead Company].\\n\\nBest regards,\\n[Agent]",
-  "needsCalendar": true
-}`;
-
-    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: combinedPrompt }],
-        temperature: 0.3,
-        max_tokens: 500
-      })
-    }, 20000);
-
-    const data = await response.json();
-    const aiResult = JSON.parse(data.choices[0].message.content.trim());
-
-    // Apply final personalization
-    let finalResponse = aiResult.text
-      .replace(/\[Name\]/g, leadInfo.name || 'there')
-      .replace(/\[Product\]/g, agentSettings.product_name || 'our solution')
-      .replace(/\[Company\]/g, agentSettings.company_name || 'ExaMark')
-      .replace(/\[Lead Company\]/g, leadInfo.company || 'your company')
-      .replace(/\[Agent\]/g, agentSettings.ai_assistant_name || 'ExaMark Team');
-
-    console.log('✅ [FAST AI] Combined response generated successfully!');
-    
-    return {
-      text: finalResponse,
-      intent: aiResult.intent,
-      needsCalendar: aiResult.needsCalendar || false
-    };
-
-  } catch (error) {
-    console.error('❌ [FAST AI] Combined generation failed:', error);
-    // Fallback to simple response
-    return {
-      text: `Thank you for your email! I'll get back to you shortly.`,
-      intent: 'general_positive',
-      needsCalendar: false
-    };
-  }
-}
-
 // Enhance template response with AI for better personalization
 async function enhanceResponseWithAI(templateResponse, emailData, intent, sentiment, settings, userId = 'default') {
   // First, get the timezone from settings for this user
@@ -1620,7 +1475,7 @@ ${timeZoneConfirmationNeeded ? '- MUST include the timezone confirmation questio
 Enhanced response:`;
 
   try {
-    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -1632,7 +1487,7 @@ Enhanced response:`;
         temperature: 0.3,
         max_tokens: 400
       })
-    }, 20000); // 20 second timeout
+    });
 
     const data = await response.json();
     const enhancedResponse = data.choices[0].message.content.trim();
@@ -1881,7 +1736,19 @@ async function getRepliesForTrackingId(trackingId) {
 
     const collectionName = 'email_tracking_events';
     
-    // Load collection into memory before querying
+    // ChatGPT debugging: Check if tracking_id is a declared schema field
+    console.log('[DEBUG] Checking collection schema...');
+    const info = await client.describeCollection({ collection_name: collectionName });
+    const fields = info.schema?.fields || info.fields || [];
+    console.log('[DEBUG] FIELDS:', fields.map(f => ({
+      name: f.name,
+      data_type: f.data_type,
+      is_primary_key: f.is_primary_key,
+      max_length: f.type_params?.max_length,
+      dim: f.type_params?.dim,
+    })));
+
+    // ChatGPT fix 1: Load collection into memory before querying
     await client.loadCollection({ collection_name: collectionName });
 
     // Get both lead messages and AI replies for full conversation
@@ -2437,7 +2304,7 @@ Important rules:
 Return only the JSON object, no other text.`;
 
       try {
-        const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -2449,7 +2316,7 @@ Return only the JSON object, no other text.`;
             max_tokens: 300,
             temperature: 0.1
           })
-        }, 25000); // 25 second timeout for calendar parsing
+        });
 
         if (response.ok) {
           const data = await response.json();
@@ -2654,99 +2521,6 @@ async function storeCalendarEventInZilliz(trackingId, calendarResult, meetingTim
     
   } catch (error) {
     console.error('❌ [CALENDAR] Failed to store calendar event in Zilliz:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// FAST ARCHITECTURE: Queue email task for background processing
-async function queueEmailTask(emailData, aiResponse, trackingId) {
-  try {
-    console.log('📧 [QUEUE] Queuing email task for background processing...');
-    
-    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
-      console.log('⚠️ [QUEUE] No Zilliz credentials, cannot queue email task');
-      return { success: false, error: 'Missing Zilliz credentials' };
-    }
-
-    const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN
-    });
-
-    const taskId = `email_${trackingId}_${Date.now()}`;
-    
-    const emailTaskData = {
-      id: taskId,
-      task_type: 'email_sending',
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      tracking_id: trackingId,
-      email_data: {
-        from: emailData.from,
-        to: emailData.from, // Reply to sender
-        subject: `Re: ${emailData.subject}`,
-        body: aiResponse.response || aiResponse.text,
-        original_message_id: emailData.messageId,
-        tracking_id: trackingId
-      },
-      ai_response: aiResponse,
-      dummy_vector: [0, 0] // Required for Zilliz
-    };
-
-    // Store in email_tasks collection
-    await client.insert({
-      collection_name: 'email_tasks',
-      data: [emailTaskData]
-    });
-    
-    console.log('✅ [QUEUE] Email task queued successfully:', taskId);
-    return { success: true, taskId: taskId };
-    
-  } catch (error) {
-    console.error('❌ [QUEUE] Failed to queue email task:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// FAST ARCHITECTURE: Queue database storage task for background processing  
-async function queueStorageTask(emailData, aiResponse, trackingId) {
-  try {
-    console.log('💾 [QUEUE] Queuing storage task for background processing...');
-    
-    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
-      console.log('⚠️ [QUEUE] No Zilliz credentials, cannot queue storage task');
-      return { success: false, error: 'Missing Zilliz credentials' };
-    }
-
-    const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN
-    });
-
-    const taskId = `storage_${trackingId}_${Date.now()}`;
-    
-    const storageTaskData = {
-      id: taskId,
-      task_type: 'database_storage',
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      tracking_id: trackingId,
-      lead_message: emailData,
-      ai_response: aiResponse,
-      dummy_vector: [0, 0] // Required for Zilliz
-    };
-
-    // Store in storage_tasks collection
-    await client.insert({
-      collection_name: 'storage_tasks',
-      data: [storageTaskData]
-    });
-    
-    console.log('✅ [QUEUE] Storage task queued successfully:', taskId);
-    return { success: true, taskId: taskId };
-    
-  } catch (error) {
-    console.error('❌ [QUEUE] Failed to queue storage task:', error);
     return { success: false, error: error.message };
   }
 }
