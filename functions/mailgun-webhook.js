@@ -215,67 +215,74 @@ function verifyWebhookSignature(token, timestamp, signature, signingKey) {
 
 // Function to extract tracking ID from various sources
 function extractTrackingId(formData, subject, body) {
-  // Method 1: Message-ID correlation (MOST RELIABLE)
+  console.log('[EXTRACT] Starting tracking ID extraction...');
+  console.log('[EXTRACT] Form data keys:', Object.keys(formData));
+  console.log('[EXTRACT] Subject:', subject);
+  
+  // Method 1: Look for tracking ID in our AI response Message-ID headers
   const inReplyTo = formData['In-Reply-To'] || formData['in-reply-to'];
   if (inReplyTo) {
-    console.log('[EXTRACT] Checking In-Reply-To for Message-ID correlation:', inReplyTo);
-    // Extract Message-ID from angle brackets: <20250920182642.0f18ea4c1f7d05c9@mg.examarkchat.com>
-    const messageIdMatch = inReplyTo.match(/<([^>]+)>/);
-    if (messageIdMatch) {
-      const messageId = messageIdMatch[1];
-      console.log('[EXTRACT] Found Message-ID:', messageId);
-      
-      // Look up tracking ID from Message-ID mapping
-      // Note: In production, this should query a database or shared storage
-      // For now, we'll still try the direct tracking-ID extraction as fallback
+    console.log('[EXTRACT] Checking In-Reply-To for AI response Message-ID:', inReplyTo);
+    // Look for our AI response pattern: <ai-response-TRACKINGID-timestamp@domain>
+    const aiResponseMatch = inReplyTo.match(/<ai-response-([a-f0-9]{32})-\d+@/);
+    if (aiResponseMatch) {
+      console.log('[EXTRACT] Found tracking ID in AI response Message-ID:', aiResponseMatch[1]);
+      return aiResponseMatch[1];
+    }
+    
+    // Look for original tracking pattern: <tracking-TRACKINGID@domain>
+    const trackingMatch = inReplyTo.match(/<tracking-([a-f0-9]{32})@/);
+    if (trackingMatch) {
+      console.log('[EXTRACT] Found tracking ID in original Message-ID:', trackingMatch[1]);
+      return trackingMatch[1];
+    }
+  }
+
+  // Method 2: Look for tracking ID in References header
+  const references = formData.References || formData.references;
+  if (references) {
+    console.log('[EXTRACT] Checking References header:', references);
+    // Look for our AI response pattern first
+    const aiResponseMatch = references.match(/<ai-response-([a-f0-9]{32})-\d+@/);
+    if (aiResponseMatch) {
+      console.log('[EXTRACT] Found tracking ID in References AI response:', aiResponseMatch[1]);
+      return aiResponseMatch[1];
+    }
+    
+    // Look for original tracking pattern
+    const trackingMatch = references.match(/<tracking-([a-f0-9]{32})@/);
+    if (trackingMatch) {
+      console.log('[EXTRACT] Found tracking ID in References original:', trackingMatch[1]);
+      return trackingMatch[1];
     }
   }
   
-  // Method 2: Look for tracking ID in recipient email address (most reliable)
+  // Method 3: Look for tracking ID in subject line [TRACKINGID]
+  const subjectMatch = subject?.match(/\[([a-f0-9]{32})\]/);
+  if (subjectMatch) {
+    console.log('[EXTRACT] Found tracking ID in subject:', subjectMatch[1]);
+    return subjectMatch[1];
+  }
+  
+  // Method 4: Look for tracking ID in recipient email address
   const recipient = formData.recipient || formData.To || formData.to;
   if (recipient) {
-    const emailMatch = recipient.match(/tracking-(\w+)@/);
+    console.log('[EXTRACT] Checking recipient:', recipient);
+    const emailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
     if (emailMatch) {
       console.log('[EXTRACT] Found tracking ID in recipient:', emailMatch[1]);
       return emailMatch[1];
     }
   }
   
-  // Method 3: Look for tracking ID in subject line
-  const subjectMatch = subject?.match(/\[(\w+)\]/);
-  if (subjectMatch) {
-    console.log('[EXTRACT] Found tracking ID in subject:', subjectMatch[1]);
-    return subjectMatch[1];
-  }
-  
-  // Method 4: Look for tracking ID in body text
-  const bodyMatch = body?.match(/tracking[_\s]*id[:\s]*(\w+)/i);
+  // Method 5: Look for tracking ID in body text
+  const bodyMatch = body?.match(/Message ID:\s*([a-f0-9]{32})/i);
   if (bodyMatch) {
-    console.log('[EXTRACT] Found tracking ID in body:', bodyMatch[1]);
+    console.log('[EXTRACT] Found tracking ID in body Message ID:', bodyMatch[1]);
     return bodyMatch[1];
   }
   
-  // Method 5: Look in In-Reply-To header for tracking-ID pattern (FIXED)
-  if (inReplyTo) {
-    console.log('[EXTRACT] Checking In-Reply-To header for tracking pattern:', inReplyTo);
-    const trackingMatch = inReplyTo.match(/tracking-([a-f0-9]{32})/i);
-    if (trackingMatch) {
-      console.log('[EXTRACT] Found tracking ID in In-Reply-To:', trackingMatch[1]);
-      return trackingMatch[1];
-    }
-  }
-  
-  // Method 6: Look in References header for tracking-ID pattern (FIXED)
-  const references = formData.References || formData.references;
-  if (references) {
-    console.log('[EXTRACT] Checking References header:', references);
-    const trackingMatch = references.match(/tracking-([a-f0-9]{32})/i);
-    if (trackingMatch) {
-      console.log('[EXTRACT] Found tracking ID in References:', trackingMatch[1]);
-      return trackingMatch[1];
-    }
-  }
-  
+  console.log('[EXTRACT] No tracking ID found in any location');
   return null;
 }
 
@@ -593,7 +600,11 @@ async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
       ? `replies@${process.env.MAILGUN_DOMAIN}`
       : `noreply@${process.env.MAILGUN_DOMAIN}`;
     
-    const fromEmail = `ExaMark AI Assistant <${replyAddress}>`;
+    // Make the from address clearer to ensure replies go to the right place
+    const fromEmail = shouldKeepConversationOpen
+      ? `ExaMark <${replyAddress}>` // Simpler format for active conversations
+      : `ExaMark AI Assistant <${replyAddress}>`;
+    
     const toEmail = originalEmailData.from;
     const subject = generateReplySubject(originalEmailData.subject, trackingId);
     
@@ -638,18 +649,43 @@ ${footerMessage}
 
 Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
 
-    // Send email via Mailgun API - simplified version
+    // Send email via Mailgun API with explicit Reply-To header
     const params = new URLSearchParams();
     params.append('from', fromEmail);
     params.append('to', toEmail);
     params.append('subject', subject);
     params.append('text', textContent);
     
+    // CRITICAL: Add tracking-aware headers for conversation threading
+    if (trackingId) {
+      // Custom Message-ID that includes tracking ID
+      const messageId = `<ai-response-${trackingId}-${Date.now()}@${process.env.MAILGUN_DOMAIN}>`;
+      params.append('h:Message-ID', messageId);
+      
+      // Reference the original tracking email for threading
+      const originalMessageId = `<tracking-${trackingId}@${process.env.MAILGUN_DOMAIN}>`;
+      params.append('h:In-Reply-To', originalMessageId);
+      params.append('h:References', originalMessageId);
+      
+      console.log('[AUTO RESPONSE] Adding tracking headers:', {
+        messageId,
+        inReplyTo: originalMessageId,
+        references: originalMessageId
+      });
+    }
+    
+    // CRITICAL: Add explicit Reply-To header to ensure replies go to correct address
+    if (shouldKeepConversationOpen) {
+      params.append('h:Reply-To', `ExaMark <${replyAddress}>`);
+      console.log('[AUTO RESPONSE] Setting Reply-To:', `ExaMark <${replyAddress}>`);
+    }
+    
     console.log('[AUTO RESPONSE] Sending email...', { 
       from: fromEmail, 
       to: toEmail, 
       subject,
-      textLength: textContent.length 
+      textLength: textContent.length,
+      replyTo: shouldKeepConversationOpen ? `ExaMark <${replyAddress}>` : 'none'
     });
 
     const response = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
@@ -708,10 +744,16 @@ Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
   }
 }
 
-// Function to generate appropriate reply subject
+// Function to generate appropriate reply subject  
 function generateReplySubject(originalSubject, trackingId) {
   // Remove existing Re: prefixes
   let cleanSubject = originalSubject?.replace(/^(Re:\s*)+/i, '') || 'Your message';
+  
+  // Include tracking ID in subject for preservation
+  const hasTrackingInSubject = cleanSubject.includes(`[${trackingId}]`);
+  if (!hasTrackingInSubject && trackingId) {
+    cleanSubject = `${cleanSubject} [${trackingId}]`;
+  }
   
   // Add our reply prefix
   return `Re: ${cleanSubject}`;
