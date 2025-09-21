@@ -320,7 +320,7 @@ function extractTrackingId(formData, subject, body) {
   // Method 3: Look for tracking ID in subject line [TRACKINGID] or Track_ID patterns
   
   // Check for NEW format in subject: [userId_timestamp_hash] or (ID: userId_timestamp_hash)
-  const subjectNewMatch = subject?.match(/\[([a-zA-Z0-9_-]+)\]|ID:\s*([a-zA-Z0-9_-]+)\)/);
+  const subjectNewMatch = subject?.match(/\[([a-zA-Z0-9_-]+)\]|\(ID:\s*([a-zA-Z0-9_-]+)\)/);
   if (subjectNewMatch) {
     const trackingId = subjectNewMatch[1] || subjectNewMatch[2];
     console.log('[EXTRACT] Found NEW format tracking ID in subject:', trackingId);
