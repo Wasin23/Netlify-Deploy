@@ -7,6 +7,27 @@ const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 // Import local calendar manager
 const { calendarManager } = require('./calendarIntegrationManager');
 
+// Helper function for fetch with timeout to prevent 504 Gateway Timeout
+async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeoutMs}ms`);
+    }
+    throw error;
+  }
+}
+
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -396,7 +417,7 @@ async function createEmbedding(text) {
       return [0.0, 0.0]; // Fallback dummy vector
     }
 
-    const response = await fetch('https://api.openai.com/v1/embeddings', {
+    const response = await fetchWithTimeout('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -406,7 +427,7 @@ async function createEmbedding(text) {
         input: text,
         model: "text-embedding-ada-002"
       })
-    });
+    }, 15000); // 15 second timeout
 
     if (!response.ok) {
       throw new Error(`OpenAI API error: ${response.status}`);
@@ -628,7 +649,7 @@ IMPORTANT: Only mark as "meeting_booked" if there's a SPECIFIC time/date mention
 Respond with ONLY the JSON object, no other text.`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -640,7 +661,7 @@ Respond with ONLY the JSON object, no other text.`;
         temperature: 0.1,
         max_tokens: 100
       })
-    });
+    }, 20000); // 20 second timeout
 
     const data = await response.json();
     const analysis = JSON.parse(data.choices[0].message.content.trim());
@@ -985,14 +1006,14 @@ Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
       replyTo: shouldKeepConversationOpen ? `ExaMark <${replyAddress}>` : 'none'
     });
 
-    const response = await fetch(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
+    const response = await fetchWithTimeout(`https://api.mailgun.net/v3/${process.env.MAILGUN_DOMAIN}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${btoa(`api:${process.env.MAILGUN_API_KEY}`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: params.toString()
-    });
+    }, 15000); // 15 second timeout for email sending
 
     let result;
     try {
@@ -1270,7 +1291,7 @@ Examples of "meeting_time_preference":
 Respond with just the intent category, nothing else.`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -1282,7 +1303,7 @@ Respond with just the intent category, nothing else.`;
         temperature: 0.1,
         max_tokens: 50
       })
-    });
+    }, 20000); // 20 second timeout
 
     const data = await response.json();
     return data.choices[0].message.content.trim().toLowerCase();
@@ -1305,7 +1326,7 @@ Classify as one of: positive, negative, neutral, frustrated, excited, interested
 Respond with just the sentiment word, nothing else.`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -1317,7 +1338,7 @@ Respond with just the sentiment word, nothing else.`;
         temperature: 0.1,
         max_tokens: 20
       })
-    });
+    }, 20000); // 20 second timeout
 
     const data = await response.json();
     return data.choices[0].message.content.trim().toLowerCase();
@@ -1533,7 +1554,7 @@ ${timeZoneConfirmationNeeded ? '- MUST include the timezone confirmation questio
 Enhanced response:`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -1545,7 +1566,7 @@ Enhanced response:`;
         temperature: 0.3,
         max_tokens: 400
       })
-    });
+    }, 20000); // 20 second timeout
 
     const data = await response.json();
     const enhancedResponse = data.choices[0].message.content.trim();
@@ -2362,7 +2383,7 @@ Important rules:
 Return only the JSON object, no other text.`;
 
       try {
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -2374,7 +2395,7 @@ Return only the JSON object, no other text.`;
             max_tokens: 300,
             temperature: 0.1
           })
-        });
+        }, 25000); // 25 second timeout for calendar parsing
 
         if (response.ok) {
           const data = await response.json();
