@@ -142,10 +142,28 @@ Looking forward to our conversation!`;
      * Create a Google Calendar event (if API configured)
      */
     async createGoogleCalendarEvent(eventDetails, userCalendarId = null) {
+        // Debug logging to see what we have
+        console.log('🔍 [CALENDAR DEBUG] Environment check:');
+        console.log('🔍 [CALENDAR DEBUG] Starting createGoogleCalendarEvent');
+        console.log('🔍 [CALENDAR DEBUG] userCalendarId passed:', userCalendarId);
+        console.log('🔍 [CALENDAR DEBUG] this.googleCalendarId from env:', this.googleCalendarId);
+        
+        // Use userCalendarId first, then fallback to environment variable
         const calendarId = userCalendarId || this.googleCalendarId;
+        
+        console.log('🔍 [CALENDAR DEBUG] googleServiceAccountEmail:', !!this.googleServiceAccountEmail);
+        console.log('🔍 [CALENDAR DEBUG] googlePrivateKey:', !!this.googlePrivateKey);
+        console.log('🔍 [CALENDAR DEBUG] final calendarId:', calendarId);
+        console.log('🔍 [CALENDAR DEBUG] userCalendarId type:', typeof userCalendarId);
+        console.log('🔍 [CALENDAR DEBUG] userCalendarId value:', JSON.stringify(userCalendarId));
         
         if (!this.googleServiceAccountEmail || !this.googlePrivateKey || !calendarId) {
             console.warn('⚠️ [CALENDAR] Google Calendar Service Account not configured or Calendar ID missing');
+            console.warn('⚠️ [CALENDAR] Missing:', {
+                serviceAccount: !this.googleServiceAccountEmail,
+                privateKey: !this.googlePrivateKey, 
+                calendarId: !calendarId
+            });
             return { success: false, error: 'Google Calendar Service Account not configured or Calendar ID missing' };
         }
 
