@@ -1,7 +1,25 @@
 // Background worker function for processing queued storage tasks
 // This function runs separately from the main webhook to avoid timeout issues
 
-const { ZillizApi } = require('./mailgun-webhook.js');
+const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
+
+// Simple Zilliz API wrapper
+class ZillizApi {
+  constructor(endpoint, token) {
+    this.client = new MilvusClient({
+      address: endpoint,
+      token: token
+    });
+  }
+
+  async search(params) {
+    return await this.client.search(params);
+  }
+
+  async upsert(params) {
+    return await this.client.upsert(params);
+  }
+}
 
 exports.handler = async (event, context) => {
   console.log('💾 [STORAGE WORKER] Background worker started');

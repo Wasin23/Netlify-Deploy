@@ -182,82 +182,6 @@ exports.handler = async function(event, context) {
         aiResponse = { error: error.message };
       }
       
-      /*
-      // Generate AI response suggestion first (now with user-specific settings)
-      try {
-        aiResponse = await generateAIResponse(emailData, userId);
-        console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
-        
-        // Automatically send the AI response back to the customer
-        if (aiResponse && aiResponse.success && aiResponse.response) {
-          try {
-            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
-            aiResponse.emailSent = emailSent;
-            console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
-            
-            // Check if we should automatically create a calendar event
-            if (aiResponse.intent) {
-              console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
-              console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
-              try {
-                const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
-                console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
-                if (calendarResult.eventCreated) {
-                  console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
-                  aiResponse.calendarEvent = calendarResult;
-                } else {
-                  console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
-                  aiResponse.calendarEvent = calendarResult;
-                }
-              } catch (calendarError) {
-                console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
-                aiResponse.calendarEvent = { success: false, error: calendarError.message };
-              }
-            } else {
-              console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
-            }
-          } catch (emailError) {
-            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
-            aiResponse.emailSent = { success: false, error: emailError.message };
-          }
-        }
-      } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
-        aiResponse = { error: error.message };
-      }
-                }
-              } catch (calendarError) {
-                console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
-                aiResponse.calendarEvent = { success: false, error: calendarError.message };
-              }
-            } else {
-              console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
-            }
-          } catch (emailError) {
-            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
-            aiResponse.emailSent = { success: false, error: emailError.message };
-          }
-        }
-      } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
-        aiResponse = { error: error.message };
-      }
-
-      // Store lead message first, then AI response
-      try {
-        // Store the lead's original message
-        const leadMessageResult = await storeLeadMessage(emailData, trackingId);
-        console.log('💬 [NETLIFY WEBHOOK] Lead message stored:', leadMessageResult);
-        
-        // Store AI response
-        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
-        console.log('💬 [NETLIFY WEBHOOK] AI response stored:', zillizResult);
-      } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to store conversation in Zilliz:', error);
-        zillizResult = { error: error.message, success: false };
-      }
-      */
-      
       // FAST WEBHOOK: Queue storage operations for background processing
       console.log('⚡ [FAST WEBHOOK] Queueing storage operations for background processing');
       try {
@@ -373,25 +297,11 @@ function extractTrackingId(formData, subject, body) {
       return newAiResponseMatch[1];
     }
     
-    // Look for OLD format AI response pattern: <ai-response-TRACKINGID-timestamp@domain>
-    const oldAiResponseMatch = inReplyTo.match(/<ai-response-([a-f0-9]{32})-\d+@/);
-    if (oldAiResponseMatch) {
-      console.log('[EXTRACT] Found OLD format tracking ID in AI response Message-ID:', oldAiResponseMatch[1]);
-      return oldAiResponseMatch[1];
-    }
-    
     // Look for NEW format original tracking pattern: <tracking-userId_timestamp_hash@domain>
     const newTrackingMatch = inReplyTo.match(/<tracking-([a-zA-Z0-9_-]+)@/);
     if (newTrackingMatch) {
       console.log('[EXTRACT] Found NEW format tracking ID in original Message-ID:', newTrackingMatch[1]);
       return newTrackingMatch[1];
-    }
-    
-    // Look for OLD format original tracking pattern: <tracking-TRACKINGID@domain>
-    const oldTrackingMatch = inReplyTo.match(/<tracking-([a-f0-9]{32})@/);
-    if (oldTrackingMatch) {
-      console.log('[EXTRACT] Found OLD format tracking ID in original Message-ID:', oldTrackingMatch[1]);
-      return oldTrackingMatch[1];
     }
   }
 
@@ -420,13 +330,6 @@ function extractTrackingId(formData, subject, body) {
       console.log('[EXTRACT] Found NEW format tracking ID in References original:', newTrackingMatch[1]);
       return newTrackingMatch[1];
     }
-    
-    // Look for OLD format original tracking pattern
-    const oldTrackingMatch = references.match(/<tracking-([a-f0-9]{32})@/);
-    if (oldTrackingMatch) {
-      console.log('[EXTRACT] Found OLD format tracking ID in References original:', oldTrackingMatch[1]);
-      return oldTrackingMatch[1];
-    }
   }
   
   // Method 3: Look for tracking ID in subject line [TRACKINGID] or Track_ID patterns
@@ -437,13 +340,6 @@ function extractTrackingId(formData, subject, body) {
     const trackingId = subjectNewMatch[1] || subjectNewMatch[2];
     console.log('[EXTRACT] Found NEW format tracking ID in subject:', trackingId);
     return trackingId;
-  }
-  
-  // Check for OLD format in subject: [32-char hex]
-  const subjectOldMatch = subject?.match(/\[([a-f0-9]{32})\]/);
-  if (subjectOldMatch) {
-    console.log('[EXTRACT] Found OLD format tracking ID in subject:', subjectOldMatch[1]);
-    return subjectOldMatch[1];
   }
   
   // Also check for Track_ patterns for testing purposes
@@ -471,13 +367,6 @@ function extractTrackingId(formData, subject, body) {
       console.log('[EXTRACT] Found NEW format tracking ID in recipient:', newEmailMatch[1]);
       return newEmailMatch[1];
     }
-    
-    // Check for OLD format in recipient
-    const oldEmailMatch = recipient.match(/tracking-([a-f0-9]{32})@/);
-    if (oldEmailMatch) {
-      console.log('[EXTRACT] Found OLD format tracking ID in recipient:', oldEmailMatch[1]);
-      return oldEmailMatch[1];
-    }
   }
   
   // Method 5: Look for tracking ID in body text
@@ -487,13 +376,6 @@ function extractTrackingId(formData, subject, body) {
   if (newBodyMatch) {
     console.log('[EXTRACT] Found NEW format tracking ID in body Message ID:', newBodyMatch[1]);
     return newBodyMatch[1];
-  }
-  
-  // Check for OLD format in body: Message ID: 32-char hex
-  const oldBodyMatch = body?.match(/Message ID:\s*([a-f0-9]{32})/i);
-  if (oldBodyMatch) {
-    console.log('[EXTRACT] Found OLD format tracking ID in body Message ID:', oldBodyMatch[1]);
-    return oldBodyMatch[1];
   }
   
   console.log('[EXTRACT] No tracking ID found in any location');
@@ -1999,19 +1881,7 @@ async function getRepliesForTrackingId(trackingId) {
 
     const collectionName = 'email_tracking_events';
     
-    // ChatGPT debugging: Check if tracking_id is a declared schema field
-    console.log('[DEBUG] Checking collection schema...');
-    const info = await client.describeCollection({ collection_name: collectionName });
-    const fields = info.schema?.fields || info.fields || [];
-    console.log('[DEBUG] FIELDS:', fields.map(f => ({
-      name: f.name,
-      data_type: f.data_type,
-      is_primary_key: f.is_primary_key,
-      max_length: f.type_params?.max_length,
-      dim: f.type_params?.dim,
-    })));
-
-    // ChatGPT fix 1: Load collection into memory before querying
+    // Load collection into memory before querying
     await client.loadCollection({ collection_name: collectionName });
 
     // Get both lead messages and AI replies for full conversation
