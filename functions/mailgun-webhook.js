@@ -1224,29 +1224,23 @@ async function generateAIResponse(emailData, userId = 'default') {
       agentSettings = getDefaultSettings();
     }
     
-    // Step 2: Classify intent using OpenAI
-    const intent = await classifyIntentWithAI(emailData.body);
-    console.log('🎯 [SMART AI] Intent classified:', intent);
-    
-    // Step 3: Analyze sentiment
-    const sentiment = await analyzeSentimentWithAI(emailData.body);
-    console.log('💭 [SMART AI] Sentiment analyzed:', sentiment);
-    
-    // Step 4: Extract lead information for personalization
+    // Step 2: Extract lead information for personalization
     const leadInfo = extractLeadInfo(emailData);
     console.log('👤 [SMART AI] Lead info extracted:', leadInfo);
     
-    // Step 5: Generate context-aware response with template engine
-    const response = await generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo, userId);
+    // Step 3: Generate AI response with combined intent detection (SINGLE API CALL)
+    const response = await generateSmartResponseWithIntent(emailData, agentSettings, leadInfo, userId);
+    console.log('🤖 [SMART AI] Combined response generated:', response);
     
     return {
       success: true,
-      response: response,
-      intent: intent,  // Add intent to the response object for calendar detection
-      provider: 'Enhanced Smart AI Responder v2.0',
-      analysis: { intent, sentiment },
+      response: response.text,
+      intent: response.intent,  // Intent from combined response
+      provider: 'Enhanced Smart AI Responder v3.0',
+      analysis: { intent: response.intent, sentiment: 'optimized' }, // Removed sentiment analysis
       settings_used: !!agentSettings.company_name,
-      personalization: leadInfo
+      personalization: leadInfo,
+      needsCalendar: response.needsCalendar || false
     };
 
   } catch (error) {
@@ -1497,6 +1491,95 @@ function applyTemplateSubstitutions(template, variables) {
   result = result.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
 
   return result;
+}
+
+// NEW: Combined AI Response Generation with Intent Detection (SINGLE API CALL)
+async function generateSmartResponseWithIntent(emailData, agentSettings, leadInfo, userId = 'default') {
+  try {
+    console.log('🚀 [FAST AI] Generating combined response with intent detection...');
+    
+    const defaultTimezone = await getTimezoneFromSettings(userId);
+    
+    const combinedPrompt = `You are an AI sales assistant responding to email replies. Analyze the email and provide both a response AND intent classification in a single response.
+
+EMAIL CONTEXT:
+- From: ${emailData.from}
+- Subject: ${emailData.subject}
+- Message: "${emailData.body}"
+- Lead Company: ${leadInfo.company}
+- Lead Name: ${leadInfo.name}
+
+AGENT SETTINGS:
+- Company: ${agentSettings.company_name || 'ExaMark'}
+- Product: ${agentSettings.product_name || 'our solution'}
+- Response Tone: ${agentSettings.response_tone || 'professional'}
+- Calendar Link: ${agentSettings.calendar_link || ''}
+- Default Timezone: ${defaultTimezone}
+
+INSTRUCTIONS:
+1. Classify the intent as ONE of: meeting_request_positive, meeting_request_negative, meeting_time_preference, pricing_question, technical_question, general_positive, general_negative, unsubscribe_request
+2. Generate a personalized email response using the agent settings
+3. Replace generic terms like "Gmail" with the actual company name
+4. Use professional meeting language (avoid casual terms like "chat")
+5. If they mention specific times/dates, ask for timezone confirmation if not specified
+6. Keep response concise and professional
+
+RESPOND WITH THIS EXACT JSON FORMAT:
+{
+  "intent": "classified_intent_here",
+  "text": "Your professional email response here",
+  "needsCalendar": true/false
+}
+
+Example response:
+{
+  "intent": "meeting_request_positive",
+  "text": "Hi [Name],\\n\\nThank you for your interest in [Product]! I'd love to set up a meeting to discuss how [Company] can help [Lead Company].\\n\\nBest regards,\\n[Agent]",
+  "needsCalendar": true
+}`;
+
+    const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: combinedPrompt }],
+        temperature: 0.3,
+        max_tokens: 500
+      })
+    }, 20000);
+
+    const data = await response.json();
+    const aiResult = JSON.parse(data.choices[0].message.content.trim());
+
+    // Apply final personalization
+    let finalResponse = aiResult.text
+      .replace(/\[Name\]/g, leadInfo.name || 'there')
+      .replace(/\[Product\]/g, agentSettings.product_name || 'our solution')
+      .replace(/\[Company\]/g, agentSettings.company_name || 'ExaMark')
+      .replace(/\[Lead Company\]/g, leadInfo.company || 'your company')
+      .replace(/\[Agent\]/g, agentSettings.ai_assistant_name || 'ExaMark Team');
+
+    console.log('✅ [FAST AI] Combined response generated successfully!');
+    
+    return {
+      text: finalResponse,
+      intent: aiResult.intent,
+      needsCalendar: aiResult.needsCalendar || false
+    };
+
+  } catch (error) {
+    console.error('❌ [FAST AI] Combined generation failed:', error);
+    // Fallback to simple response
+    return {
+      text: `Thank you for your email! I'll get back to you shortly.`,
+      intent: 'general_positive',
+      needsCalendar: false
+    };
+  }
 }
 
 // Enhance template response with AI for better personalization
