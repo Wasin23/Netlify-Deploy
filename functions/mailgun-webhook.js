@@ -138,6 +138,14 @@ exports.handler = async function(event, context) {
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
         
         // Check if we should automatically create a calendar event FIRST
+        console.log('📧 [NETLIFY WEBHOOK] Checking for calendar event creation...');
+        console.log('📧 [NETLIFY WEBHOOK] AI Response object:', {
+          success: aiResponse?.success,
+          hasResponse: !!aiResponse?.response,
+          intent: aiResponse?.intent,
+          analysis: aiResponse?.analysis
+        });
+        
         let calendarEvent = null;
         if (aiResponse.intent) {
           console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
@@ -159,6 +167,7 @@ exports.handler = async function(event, context) {
           }
         } else {
           console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
+          console.log('⚠️ [NETLIFY WEBHOOK] AI Response keys:', Object.keys(aiResponse || {}));
         }
 
         // Automatically send the AI response back to the customer (WITH calendar link if event was created)
