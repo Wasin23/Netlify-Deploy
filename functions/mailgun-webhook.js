@@ -124,6 +124,20 @@ exports.handler = async function(event, context) {
             const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
             aiResponse.emailSent = emailSent;
             console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
+            
+            // Check if we should automatically create a calendar event
+            if (aiResponse.intent) {
+              try {
+                const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
+                if (calendarResult.eventCreated) {
+                  console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
+                  aiResponse.calendarEvent = calendarResult;
+                }
+              } catch (calendarError) {
+                console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
+                aiResponse.calendarEvent = { success: false, error: calendarError.message };
+              }
+            }
           } catch (emailError) {
             console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
             aiResponse.emailSent = { success: false, error: emailError.message };
@@ -1966,5 +1980,266 @@ async function loadAgentSettings() {
   } catch (error) {
     console.error('[AGENT SETTINGS] Failed to load from Zilliz:', error);
     return getDefaultResponseSettings();
+  }
+}
+
+// Smart Calendar Event Creation - Automatically creates calendar events when appropriate
+async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
+  try {
+    console.log('📅 [CALENDAR] Analyzing email for automatic calendar event creation...');
+    
+    const emailBody = emailData.body || '';
+    const intent = aiResponse.intent;
+    
+    // Only proceed if Google Calendar API is configured
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_CALENDAR_ID) {
+      console.log('⚠️ [CALENDAR] Google Calendar Service Account not configured, skipping auto-event creation');
+      return { eventCreated: false, reason: 'Google Calendar Service Account not configured' };
+    }
+    
+    // Check if this email contains a confirmed meeting time
+    const meetingTimeDetected = await detectConfirmedMeetingTime(emailBody, intent);
+    
+    if (!meetingTimeDetected.found) {
+      console.log('📅 [CALENDAR] No confirmed meeting time detected, skipping event creation');
+      return { eventCreated: false, reason: 'No confirmed meeting time found' };
+    }
+    
+    console.log('📅 [CALENDAR] Confirmed meeting detected:', meetingTimeDetected);
+    
+    // Extract lead information
+    const leadInfo = extractLeadInfo(emailData);
+    
+    // Create the calendar event
+    const eventDetails = {
+      title: `Sales Discussion - ${leadInfo.name || 'Prospect'}`,
+      description: `Automatic meeting scheduled via AI email responder\n\nLead: ${leadInfo.name}\nEmail: ${emailData.from}\nCompany: ${leadInfo.company}\n\nOriginal message:\n${emailBody.substring(0, 300)}...`,
+      startTime: meetingTimeDetected.startTime,
+      endTime: meetingTimeDetected.endTime,
+      timeZone: meetingTimeDetected.timeZone || 'America/New_York',
+      attendees: [
+        { email: emailData.from, displayName: leadInfo.name }
+      ]
+    };
+    
+    // Import and use calendar manager
+    const { calendarManager } = await import('../../utils/calendarIntegrationManager.js');
+    
+    if (!calendarManager.initialized) {
+      await calendarManager.initialize();
+    }
+    
+    const result = await calendarManager.createGoogleCalendarEvent(eventDetails);
+    
+    if (result.success) {
+      console.log('✅ [CALENDAR] Calendar event created successfully');
+      
+      // Store the event creation in Zilliz for tracking
+      await storeCalendarEventInZilliz(trackingId, result, meetingTimeDetected, leadInfo);
+      
+      return {
+        eventCreated: true,
+        eventDetails: result,
+        meetingTime: meetingTimeDetected,
+        leadInfo: leadInfo
+      };
+    } else {
+      console.error('❌ [CALENDAR] Failed to create calendar event:', result.error);
+      return {
+        eventCreated: false,
+        error: result.error,
+        reason: 'Google Calendar API error'
+      };
+    }
+    
+  } catch (error) {
+    console.error('❌ [CALENDAR] Error in calendar event creation:', error);
+    return {
+      eventCreated: false,
+      error: error.message,
+      reason: 'Unexpected error during calendar event creation'
+    };
+  }
+}
+
+// Detect confirmed meeting times in email content using AI
+async function detectConfirmedMeetingTime(emailBody, intent) {
+  try {
+    console.log('📅 [CALENDAR] Analyzing email content for meeting times...');
+    
+    // Quick keyword check first
+    const emailLower = emailBody.toLowerCase();
+    const timeKeywords = [
+      'tomorrow at', 'today at', 'monday at', 'tuesday at', 'wednesday at', 'thursday at', 'friday at',
+      'pm on', 'am on', "o'clock", 'meeting at', 'call at', 'scheduled for', 'booked for'
+    ];
+    
+    const hasTimeKeywords = timeKeywords.some(keyword => emailLower.includes(keyword));
+    
+    if (!hasTimeKeywords && intent !== 'meeting_time_preference') {
+      return { found: false, reason: 'No time-related keywords found' };
+    }
+    
+    // Use OpenAI to parse the meeting time if available
+    if (process.env.OPENAI_API_KEY) {
+      const prompt = `
+Analyze this email to extract confirmed meeting times. Only return confirmed meetings, not suggestions.
+
+Email: "${emailBody}"
+
+Task: Extract any confirmed meeting times and return JSON in this exact format:
+{
+  "found": true/false,
+  "dateTime": "2024-01-15T14:00:00.000Z",
+  "timeZone": "America/New_York",
+  "duration": 30,
+  "confidence": "high/medium/low"
+}
+
+Only set "found": true if there's a specific date AND time mentioned. Examples of confirmed times:
+- "Let's meet tomorrow at 2pm"
+- "Tuesday at 10am works"
+- "How about Monday the 15th at 3:30pm"
+
+Do NOT set found: true for vague suggestions like:
+- "sometime next week"
+- "maybe we can chat"
+- "when are you available"
+
+Return only the JSON object.`;
+
+      try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'gpt-4',
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 200,
+            temperature: 0.1
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const content = data.choices[0].message.content.trim();
+          
+          try {
+            const parsed = JSON.parse(content);
+            
+            if (parsed.found && parsed.dateTime) {
+              const startTime = new Date(parsed.dateTime);
+              const endTime = new Date(startTime.getTime() + (parsed.duration || 30) * 60000);
+              
+              return {
+                found: true,
+                startTime: startTime.toISOString(),
+                endTime: endTime.toISOString(),
+                timeZone: parsed.timeZone || 'America/New_York',
+                confidence: parsed.confidence || 'medium',
+                source: 'AI_parsed'
+              };
+            }
+          } catch (parseError) {
+            console.error('📅 [CALENDAR] Failed to parse AI response:', parseError);
+          }
+        }
+      } catch (aiError) {
+        console.error('📅 [CALENDAR] AI parsing failed:', aiError);
+      }
+    }
+    
+    // Fallback: Basic regex parsing for common patterns
+    const patterns = [
+      /(?:tomorrow|today)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      /(monday|tuesday|wednesday|thursday|friday)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      /(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday)/i
+    ];
+    
+    for (const pattern of patterns) {
+      const match = emailBody.match(pattern);
+      if (match) {
+        console.log('📅 [CALENDAR] Found time pattern:', match[0]);
+        
+        // Basic time parsing (simplified - in production you'd want more robust parsing)
+        const now = new Date();
+        let meetingDate = new Date(now);
+        
+        // Set to tomorrow if "tomorrow" detected
+        if (match[0].toLowerCase().includes('tomorrow')) {
+          meetingDate.setDate(now.getDate() + 1);
+        }
+        
+        // Extract hour and convert to 24-hour format
+        let hour = parseInt(match[1] || match[2]);
+        const ampm = (match[3] || match[4] || '').toLowerCase();
+        
+        if (ampm === 'pm' && hour !== 12) hour += 12;
+        if (ampm === 'am' && hour === 12) hour = 0;
+        
+        meetingDate.setHours(hour, 0, 0, 0);
+        
+        const endTime = new Date(meetingDate.getTime() + 30 * 60000); // 30 minute default
+        
+        return {
+          found: true,
+          startTime: meetingDate.toISOString(),
+          endTime: endTime.toISOString(),
+          timeZone: 'America/New_York',
+          confidence: 'medium',
+          source: 'regex_parsed'
+        };
+      }
+    }
+    
+    return { found: false, reason: 'No parseable meeting time found' };
+    
+  } catch (error) {
+    console.error('📅 [CALENDAR] Error detecting meeting time:', error);
+    return { found: false, reason: 'Error during meeting time detection' };
+  }
+}
+
+// Store calendar event information in Zilliz for tracking
+async function storeCalendarEventInZilliz(trackingId, calendarResult, meetingTime, leadInfo) {
+  try {
+    console.log('📅 [CALENDAR] Storing calendar event in Zilliz...');
+    
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('⚠️ [CALENDAR] Zilliz not configured, skipping storage');
+      return { success: false, reason: 'Zilliz not configured' };
+    }
+    
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+    
+    const eventData = {
+      tracking_id: trackingId,
+      event_type: 'calendar_event_created',
+      timestamp: new Date().toISOString(),
+      user_agent: `Calendar_Event: ${calendarResult.event_id}`,
+      ip_address: '127.0.0.1',
+      email_address: leadInfo.email || 'Unknown',
+      recipient: 'ExaMark Team',
+      processed: true,
+      embedding: await createEmbedding(`Calendar event created for ${leadInfo.name} at ${meetingTime.startTime}`)
+    };
+    
+    await client.insert({
+      collection_name: 'email_tracking_events',
+      data: [eventData]
+    });
+    
+    console.log('✅ [CALENDAR] Calendar event stored in Zilliz successfully');
+    return { success: true, stored: true };
+    
+  } catch (error) {
+    console.error('❌ [CALENDAR] Failed to store calendar event in Zilliz:', error);
+    return { success: false, error: error.message };
   }
 }
