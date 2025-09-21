@@ -1,4 +1,81 @@
-const { classifyEmailIntent, detectConfirmedMeetingTime } = require('./mailgun-webhook');
+// Import the webhook module to access its functions
+const OpenAI = require('openai');
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+// Simple intent classification function
+async function classifyEmailIntent(emailContent) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: `Classify the intent of this email. Return ONE of these exact values:
+- "meeting_request_positive" - if they agree to or confirm a meeting
+- "meeting_time_preference" - if they specify a specific time/date for a meeting
+- "meeting_request" - if they ask for a meeting but no specific time
+- "question" - if they ask questions about the product/service
+- "objection" - if they express concerns or objections
+- "neutral" - for other responses
+
+Only respond with the classification, nothing else.`
+        },
+        {
+          role: "user",
+          content: emailContent
+        }
+      ],
+      max_tokens: 20,
+      temperature: 0
+    });
+
+    return response.choices[0].message.content.trim().toLowerCase();
+  } catch (error) {
+    console.error('Error classifying intent:', error);
+    return 'neutral';
+  }
+}
+
+// Simple meeting time detection
+async function detectMeetingTime(emailContent) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: `Extract meeting time information from this email. If a specific date/time is mentioned, return a JSON object with the details. If no specific time is mentioned, return null.
+
+Format: {"hasTime": true/false, "timeString": "extracted time", "details": "summary"}
+
+Only respond with valid JSON or null.`
+        },
+        {
+          role: "user",
+          content: emailContent
+        }
+      ],
+      max_tokens: 150,
+      temperature: 0
+    });
+
+    const result = response.choices[0].message.content.trim();
+    if (result === 'null') return null;
+    
+    try {
+      return JSON.parse(result);
+    } catch {
+      return null;
+    }
+  } catch (error) {
+    console.error('Error detecting meeting time:', error);
+    return null;
+  }
+}
 
 exports.handler = async (event, context) => {
   console.log('🧪 [TEST-INTENT] Starting intent classification and calendar flow test');
@@ -40,7 +117,7 @@ exports.handler = async (event, context) => {
         console.log(`🤖 [TEST-INTENT] Classified intent: ${intent}`);
         
         // Test meeting time detection
-        const meetingTime = await detectConfirmedMeetingTime(testEmail.email, testEmail.from);
+        const meetingTime = await detectMeetingTime(testEmail.email);
         console.log(`📅 [TEST-INTENT] Meeting time detected:`, meetingTime);
         
         // Check if this would trigger calendar creation
