@@ -142,28 +142,18 @@ exports.handler = async function(event, context) {
       emailData.originalTrackingId = trackingId;
       emailData.userId = userId; // Add user ID to email data
       
-      // TEST #3: Enable AI + Email sending, skip storage and calendar
-      console.log('🧪 [TEST #3] Testing AI + Email sending - no storage or calendar');
+      // TEST #4: Enable AI + Database storage, skip email sending  
+      console.log('🧪 [TEST #4] Testing AI + Database storage - no email sending');
       
       // Generate AI response suggestion first (now with user-specific settings)
       try {
         aiResponse = await generateAIResponse(emailData, userId);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
+        console.log('🧪 [TEST #4] AI generation completed, skipping email sending');
         
-        // Automatically send the AI response back to the customer
-        if (aiResponse && aiResponse.success && aiResponse.response) {
-          try {
-            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
-            aiResponse.emailSent = emailSent;
-            console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
-            console.log('🧪 [TEST #3] Email sending completed, skipping calendar and storage');
-            
-            // Skip calendar operations for this test
-          } catch (emailError) {
-            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
-            aiResponse.emailSent = { success: false, error: emailError.message };
-          }
-        }
+        // Skip email sending for this test - that's what caused the timeout
+        aiResponse.emailSent = { success: false, message: "Email sending skipped for testing" };
+        
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
         aiResponse = { error: error.message };
@@ -245,9 +235,20 @@ exports.handler = async function(event, context) {
       }
       */
       
-      // TEST: Skip storage operations for this test  
-      console.log('🧪 [TEST #3] Skipping storage operations');
-      zillizResult = { success: true, message: "Storage skipped for AI+Email testing" };
+      // TEST #4: Enable storage operations to test Zilliz database performance
+      console.log('🧪 [TEST #4] Testing database storage operations');
+      try {
+        // Store the lead's original message
+        const leadMessageResult = await storeLeadMessage(emailData, trackingId);
+        console.log('💬 [NETLIFY WEBHOOK] Lead message stored:', leadMessageResult);
+        
+        // Store AI response
+        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
+        console.log('💬 [NETLIFY WEBHOOK] AI response stored:', zillizResult);
+      } catch (error) {
+        console.error('❌ [NETLIFY WEBHOOK] Failed to store conversation in Zilliz:', error);
+        zillizResult = { error: error.message, success: false };
+      }
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
     }
