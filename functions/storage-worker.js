@@ -3,24 +3,6 @@
 
 const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 
-// Simple Zilliz API wrapper
-class ZillizApi {
-  constructor(endpoint, token) {
-    this.client = new MilvusClient({
-      address: endpoint,
-      token: token
-    });
-  }
-
-  async search(params) {
-    return await this.client.search(params);
-  }
-
-  async upsert(params) {
-    return await this.client.upsert(params);
-  }
-}
-
 exports.handler = async (event, context) => {
   console.log('💾 [STORAGE WORKER] Background worker started');
   
@@ -31,10 +13,13 @@ exports.handler = async (event, context) => {
     }
     
     // Initialize Zilliz client
-    const zilliz = new ZillizApi(process.env.ZILLIZ_ENDPOINT, process.env.ZILLIZ_TOKEN);
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
     
     // Query for pending storage tasks
-    const searchResult = await zilliz.search({
+    const searchResult = await client.search({
       collection_name: 'storage_tasks',
       data: [[0, 0, 0, 0, 0]], // Dummy vector for metadata search
       filter: 'status == "pending"',
@@ -69,7 +54,7 @@ exports.handler = async (event, context) => {
       
       try {
         // Update task status to "processing"
-        await zilliz.upsert({
+        await client.upsert({
           collection_name: 'storage_tasks',
           data: [{
             id: task.id,
@@ -96,7 +81,7 @@ exports.handler = async (event, context) => {
         }
         
         // Update task status to "completed"
-        await zilliz.upsert({
+        await client.upsert({
           collection_name: 'storage_tasks',
           data: [{
             id: task.id,
@@ -124,7 +109,7 @@ exports.handler = async (event, context) => {
         
         // Update task status to "failed"
         try {
-          await zilliz.upsert({
+          await client.upsert({
             collection_name: 'storage_tasks',
             data: [{
               id: task.id,
@@ -196,7 +181,10 @@ async function storeLeadMessage(emailData, trackingId) {
     throw new Error('Missing Zilliz credentials');
   }
   
-  const zilliz = new ZillizApi(process.env.ZILLIZ_ENDPOINT, process.env.ZILLIZ_TOKEN);
+  const client = new MilvusClient({
+    address: process.env.ZILLIZ_ENDPOINT,
+    token: process.env.ZILLIZ_TOKEN
+  });
   
   // Create lead message entry
   const leadMessageData = {
@@ -210,7 +198,7 @@ async function storeLeadMessage(emailData, trackingId) {
     vector: [0.1, 0.2, 0.3, 0.4, 0.5] // Simple dummy vector
   };
   
-  const result = await zilliz.upsert({
+  const result = await client.upsert({
     collection_name: 'email_conversations',
     data: [leadMessageData]
   });
@@ -227,7 +215,10 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse) {
     throw new Error('Missing Zilliz credentials');
   }
   
-  const zilliz = new ZillizApi(process.env.ZILLIZ_ENDPOINT, process.env.ZILLIZ_TOKEN);
+  const client = new MilvusClient({
+    address: process.env.ZILLIZ_ENDPOINT,
+    token: process.env.ZILLIZ_TOKEN
+  });
   
   // Create AI response entry
   const aiResponseData = {
@@ -243,7 +234,7 @@ async function storeReplyInZilliz(emailData, trackingId, aiResponse) {
     vector: [0.2, 0.3, 0.4, 0.5, 0.6] // Simple dummy vector
   };
   
-  const result = await zilliz.upsert({
+  const result = await client.upsert({
     collection_name: 'email_conversations',
     data: [aiResponseData]
   });

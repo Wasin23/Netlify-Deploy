@@ -3,24 +3,6 @@
 
 const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 
-// Simple Zilliz API wrapper
-class ZillizApi {
-  constructor(endpoint, token) {
-    this.client = new MilvusClient({
-      address: endpoint,
-      token: token
-    });
-  }
-
-  async search(params) {
-    return await this.client.search(params);
-  }
-
-  async upsert(params) {
-    return await this.client.upsert(params);
-  }
-}
-
 exports.handler = async (event, context) => {
   console.log('📧 [EMAIL SENDER] Background worker started');
   
@@ -35,10 +17,13 @@ exports.handler = async (event, context) => {
     }
     
     // Initialize Zilliz client
-    const zilliz = new ZillizApi(process.env.ZILLIZ_ENDPOINT, process.env.ZILLIZ_TOKEN);
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
     
     // Query for pending email tasks
-    const searchResult = await zilliz.search({
+    const searchResult = await client.search({
       collection_name: 'email_tasks',
       data: [[0, 0, 0, 0, 0]], // Dummy vector for metadata search
       filter: 'status == "pending"',
@@ -72,7 +57,7 @@ exports.handler = async (event, context) => {
       
       try {
         // Update task status to "processing"
-        await zilliz.upsert({
+        await client.upsert({
           collection_name: 'email_tasks',
           data: [{
             id: task.id,
@@ -94,7 +79,7 @@ exports.handler = async (event, context) => {
         console.log('📧 [EMAIL SENDER] Email sent for task', taskId, ':', emailResult.success);
         
         // Update task status to "completed"
-        await zilliz.upsert({
+        await client.upsert({
           collection_name: 'email_tasks',
           data: [{
             id: task.id,
@@ -120,7 +105,7 @@ exports.handler = async (event, context) => {
         
         // Update task status to "failed"
         try {
-          await zilliz.upsert({
+          await client.upsert({
             collection_name: 'email_tasks',
             data: [{
               id: task.id,
