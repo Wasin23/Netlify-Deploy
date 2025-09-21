@@ -142,6 +142,19 @@ exports.handler = async function(event, context) {
       emailData.originalTrackingId = trackingId;
       emailData.userId = userId; // Add user ID to email data
       
+      // TEST: Skip AI generation to test speed
+      console.log('🧪 [TEST] Skipping AI generation - testing basic webhook speed');
+      aiResponse = { 
+        success: true, 
+        response: "Test response - AI processing disabled for speed test", 
+        provider: "Test Mode - No AI",
+        intent: "test_mode"
+      };
+      
+      // TEST: Also skip email sending and storage for now
+      console.log('🧪 [TEST] Skipping email sending and storage operations');
+      
+      /*
       // Generate AI response suggestion first (now with user-specific settings)
       try {
         aiResponse = await generateAIResponse(emailData, userId);
@@ -184,6 +197,23 @@ exports.handler = async function(event, context) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
         aiResponse = { error: error.message };
       }
+                }
+              } catch (calendarError) {
+                console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
+                aiResponse.calendarEvent = { success: false, error: calendarError.message };
+              }
+            } else {
+              console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
+            }
+          } catch (emailError) {
+            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
+            aiResponse.emailSent = { success: false, error: emailError.message };
+          }
+        }
+      } catch (error) {
+        console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
+        aiResponse = { error: error.message };
+      }
 
       // Store lead message first, then AI response
       try {
@@ -198,6 +228,11 @@ exports.handler = async function(event, context) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to store conversation in Zilliz:', error);
         zillizResult = { error: error.message, success: false };
       }
+      */
+      
+      // TEST: Skip storage operations too
+      console.log('🧪 [TEST] Skipping storage operations');
+      zillizResult = { success: true, message: "Storage skipped for testing" };
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
     }
@@ -1085,52 +1120,62 @@ async function loadAgentSettings(userId = 'default') {
       return getDefaultSettings();
     }
 
-    const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN
-    });
-
-    // Query all settings for the user
-    const searchResult = await client.search({
-      collection_name: 'agent_settings',
-      vector: [0], // Dummy vector since we're using filter
-      limit: 100,
-      filter: `user_id == "${userId}"`
-    });
-
-    const settings = {};
-    if (searchResult.results && searchResult.results.length > 0) {
-      for (const result of searchResult.results) {
-        if (result.user_id === userId) {
-          // Parse setting_value based on setting_type
-          let value;
-          try {
-            if (result.setting_type === 'array' || result.setting_type === 'object') {
-              value = JSON.parse(result.setting_value);
-            } else if (result.setting_type === 'boolean') {
-              value = result.setting_value === 'true';
-            } else if (result.setting_type === 'number') {
-              value = parseFloat(result.setting_value);
-            } else {
-              value = result.setting_value;
-            }
-          } catch (parseError) {
-            console.error('❌ [SETTINGS] Parse error for', result.setting_key, parseError);
-            value = result.setting_value; // Fallback to string
-          }
-          
-          settings[result.setting_key] = value;
-        }
-      }
-    }
-
-    console.log('⚙️ [SETTINGS] Loaded settings from Zilliz:', Object.keys(settings));
-    return Object.keys(settings).length > 0 ? settings : getDefaultSettings();
+    // Add timeout to prevent hanging Zilliz calls
+    return await Promise.race([
+      loadAgentSettingsFromZilliz(userId),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Zilliz settings timeout')), 10000)
+      )
+    ]);
 
   } catch (error) {
-    console.error('❌ [SETTINGS] Error loading from Zilliz:', error);
+    console.error('❌ [SETTINGS] Failed to load from Zilliz:', error.message);
     return getDefaultSettings();
   }
+}
+
+async function loadAgentSettingsFromZilliz(userId = 'default') {
+  const client = new MilvusClient({
+    address: process.env.ZILLIZ_ENDPOINT,
+    token: process.env.ZILLIZ_TOKEN
+  });
+
+  // Query all settings for the user
+  const searchResult = await client.search({
+    collection_name: 'agent_settings',
+    vector: [0], // Dummy vector since we're using filter
+    limit: 100,
+    filter: `user_id == "${userId}"`
+  });
+
+  const settings = {};
+  if (searchResult.results && searchResult.results.length > 0) {
+    for (const result of searchResult.results) {
+      if (result.user_id === userId) {
+        // Parse setting_value based on setting_type
+        let value;
+        try {
+          if (result.setting_type === 'array' || result.setting_type === 'object') {
+            value = JSON.parse(result.setting_value);
+          } else if (result.setting_type === 'boolean') {
+            value = result.setting_value === 'true';
+          } else if (result.setting_type === 'number') {
+            value = parseFloat(result.setting_value);
+          } else {
+            value = result.setting_value;
+          }
+        } catch (parseError) {
+          console.error('❌ [SETTINGS] Parse error for', result.setting_key, parseError);
+          value = result.setting_value; // Fallback to string
+        }
+        
+        settings[result.setting_key] = value;
+      }
+    }
+  }
+
+  console.log('⚙️ [SETTINGS] Loaded settings from Zilliz:', Object.keys(settings));
+  return Object.keys(settings).length > 0 ? settings : getDefaultSettings();
 }
 
 // Get default settings when Zilliz is unavailable
