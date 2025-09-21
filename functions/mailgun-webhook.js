@@ -137,34 +137,36 @@ exports.handler = async function(event, context) {
         aiResponse = await generateAIResponse(emailData, userId);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
         
-        // Automatically send the AI response back to the customer
+        // Check if we should automatically create a calendar event FIRST
+        let calendarEvent = null;
+        if (aiResponse.intent) {
+          console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
+          console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
+          try {
+            const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId, userId);
+            console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
+            if (calendarResult.eventCreated) {
+              console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
+              calendarEvent = calendarResult;
+              aiResponse.calendarEvent = calendarResult;
+            } else {
+              console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
+              aiResponse.calendarEvent = calendarResult;
+            }
+          } catch (calendarError) {
+            console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
+            aiResponse.calendarEvent = { success: false, error: calendarError.message };
+          }
+        } else {
+          console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
+        }
+
+        // Automatically send the AI response back to the customer (WITH calendar link if event was created)
         if (aiResponse && aiResponse.success && aiResponse.response) {
           try {
-            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
+            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId, calendarEvent);
             aiResponse.emailSent = emailSent;
             console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
-            
-            // Check if we should automatically create a calendar event
-            if (aiResponse.intent) {
-              console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
-              console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
-              try {
-                const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId, userId);
-                console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
-                if (calendarResult.eventCreated) {
-                  console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
-                  aiResponse.calendarEvent = calendarResult;
-                } else {
-                  console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
-                  aiResponse.calendarEvent = calendarResult;
-                }
-              } catch (calendarError) {
-                console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
-                aiResponse.calendarEvent = { success: false, error: calendarError.message };
-              }
-            } else {
-              console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
-            }
           } catch (emailError) {
             console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
             aiResponse.emailSent = { success: false, error: emailError.message };
@@ -830,7 +832,7 @@ async function getConversationHistory(trackingId) {
 }
 
 // Function to automatically send AI response via Mailgun
-async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
+async function sendAutoResponse(originalEmailData, aiResponseText, trackingId, calendarEvent = null) {
   try {
     console.log('[AUTO RESPONSE] Preparing to send response...');
     
@@ -942,8 +944,20 @@ ${companyName} Team`;
       personalizedResponse = personalizedResponse.replace(/\bGmail\b/g, leadCompany);
       console.log('[AUTO RESPONSE] Replaced Gmail with:', leadCompany);
     }
+
+    // Add calendar link if event was created
+    let calendarSection = '';
+    if (calendarEvent && calendarEvent.eventCreated && calendarEvent.eventDetails && calendarEvent.eventDetails.eventLink) {
+      calendarSection = `
+
+📅 I've added our meeting to your calendar! Here's the calendar event:
+${calendarEvent.eventDetails.eventLink}
+
+You should receive a calendar invite shortly with all the details.`;
+      console.log('[AUTO RESPONSE] Adding calendar link to email:', calendarEvent.eventDetails.eventLink);
+    }
     
-    const textContent = `${personalizedResponse}
+    const textContent = `${personalizedResponse}${calendarSection}
 
 ${footerMessage}
 
