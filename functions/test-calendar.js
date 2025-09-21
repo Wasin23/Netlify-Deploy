@@ -34,12 +34,7 @@ exports.handler = async function(event, context) {
       userId
     });
 
-    // Import the calendar creation function from mailgun-webhook
-    const fs = require('fs');
-    const path = require('path');
-    const webhookCode = fs.readFileSync(path.join(__dirname, 'mailgun-webhook.js'), 'utf8');
-    
-    // Extract and test the calendar detection logic
+    // Test the calendar creation logic directly
     console.log('[TEST CALENDAR] Testing calendar manager initialization...');
     
     if (!calendarManager.initialized) {
