@@ -269,9 +269,14 @@ function extractTrackingId(formData, subject, body) {
     
     // Look for user-specific tracking pattern: <userid_timestamp_hash@domain>
     const userTrackingMatch = inReplyTo.match(/<([^@>]+)@/);
-    if (userTrackingMatch && userTrackingMatch[1].includes('_')) {
-      console.log('[EXTRACT] Found user tracking ID in Message-ID:', userTrackingMatch[1]);
-      return userTrackingMatch[1];
+    if (userTrackingMatch) {
+      const potentialTrackingId = userTrackingMatch[1];
+      // Accept any tracking ID that contains underscore (user-specific format)
+      // Examples: default_1726935600000_calendar, user123_1234567890_meeting
+      if (potentialTrackingId.includes('_') && potentialTrackingId.length >= 5) {
+        console.log('[EXTRACT] Found user tracking ID in Message-ID:', potentialTrackingId);
+        return potentialTrackingId;
+      }
     }
   }
 
@@ -295,9 +300,14 @@ function extractTrackingId(formData, subject, body) {
     
     // Look for user-specific tracking pattern: <userid_timestamp_hash@domain>
     const userTrackingMatch = references.match(/<([^@>]+)@/);
-    if (userTrackingMatch && userTrackingMatch[1].includes('_')) {
-      console.log('[EXTRACT] Found user tracking ID in References:', userTrackingMatch[1]);
-      return userTrackingMatch[1];
+    if (userTrackingMatch) {
+      const potentialTrackingId = userTrackingMatch[1];
+      // Accept any tracking ID that contains underscore (user-specific format)
+      // Examples: default_1726935600000_calendar, user123_1234567890_meeting
+      if (potentialTrackingId.includes('_') && potentialTrackingId.length >= 5) {
+        console.log('[EXTRACT] Found user tracking ID in References:', potentialTrackingId);
+        return potentialTrackingId;
+      }
     }
   }
   
@@ -308,6 +318,17 @@ function extractTrackingId(formData, subject, body) {
     return subjectMatch32[1];
   }
   
+  // Check for user-specific tracking ID format in subject [userid_timestamp_hash]
+  const subjectMatchUserFormat = subject?.match(/\[([a-zA-Z0-9_-]+)\]/);
+  if (subjectMatchUserFormat) {
+    const potentialTrackingId = subjectMatchUserFormat[1];
+    // Accept if it contains underscore and is reasonable length (user-specific format)
+    if (potentialTrackingId.includes('_') && potentialTrackingId.length >= 5) {
+      console.log('[EXTRACT] Found user-format tracking ID in subject:', potentialTrackingId);
+      return potentialTrackingId;
+    }
+  }
+  
   // Also check for Track_ patterns for testing purposes
   const subjectMatchTrack = subject?.match(/Track_([a-zA-Z0-9]+)/);
   if (subjectMatchTrack) {
@@ -315,8 +336,8 @@ function extractTrackingId(formData, subject, body) {
     return subjectMatchTrack[1];
   }
   
-  // Check for tracking ID in brackets with various formats
-  const subjectMatchBracket = subject?.match(/\[([a-zA-Z0-9_-]{5,32})\]/);
+  // Check for tracking ID in brackets with various formats (fallback)
+  const subjectMatchBracket = subject?.match(/\[([a-zA-Z0-9_-]{5,50})\]/);
   if (subjectMatchBracket) {
     console.log('[EXTRACT] Found bracketed tracking ID in subject:', subjectMatchBracket[1]);
     return subjectMatchBracket[1];
