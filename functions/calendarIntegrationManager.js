@@ -141,10 +141,12 @@ Looking forward to our conversation!`;
     /**
      * Create a Google Calendar event (if API configured)
      */
-    async createGoogleCalendarEvent(eventDetails) {
-        if (!this.googleServiceAccountEmail || !this.googlePrivateKey || !this.googleCalendarId) {
-            console.warn('⚠️ [CALENDAR] Google Calendar Service Account not configured');
-            return { success: false, error: 'Google Calendar Service Account not configured' };
+    async createGoogleCalendarEvent(eventDetails, userCalendarId = null) {
+        const calendarId = userCalendarId || this.googleCalendarId;
+        
+        if (!this.googleServiceAccountEmail || !this.googlePrivateKey || !calendarId) {
+            console.warn('⚠️ [CALENDAR] Google Calendar Service Account not configured or Calendar ID missing');
+            return { success: false, error: 'Google Calendar Service Account not configured or Calendar ID missing' };
         }
 
         console.log('📅 [CALENDAR] Creating Google Calendar event...');
@@ -168,7 +170,7 @@ Looking forward to our conversation!`;
             };
 
             const response = await fetch(
-                `https://www.googleapis.com/calendar/v3/calendars/${this.googleCalendarId}/events`,
+                `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`,
                 {
                     method: 'POST',
                     headers: {

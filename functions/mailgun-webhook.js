@@ -430,6 +430,37 @@ async function getTimezoneFromSettings(userId = 'default') {
   }
 }
 
+// Get user's Google Calendar ID from Zilliz settings
+async function getCalendarIdFromSettings(userId = 'default') {
+  try {
+    console.log('[SETTINGS] Fetching calendar ID from lead agent settings for user:', userId);
+    
+    // Try to load settings from the same source as agent settings
+    let agentSettings = {};
+    try {
+      agentSettings = await loadAgentSettings(userId);
+      console.log('[SETTINGS] Looking for calendar_id field...');
+      
+      if (agentSettings.calendar_id) {
+        console.log('[SETTINGS] Found calendar ID in agent settings:', agentSettings.calendar_id);
+        return agentSettings.calendar_id;
+      } else {
+        console.log('[SETTINGS] No calendar_id field found in settings');
+      }
+    } catch (error) {
+      console.log('[SETTINGS] Could not load agent settings for calendar ID:', error);
+    }
+    
+    // Fallback to environment variable
+    const calendarId = process.env.GOOGLE_CALENDAR_ID;
+    console.log('[SETTINGS] Using fallback calendar ID from environment');
+    return calendarId;
+  } catch (error) {
+    console.error('[SETTINGS] Error fetching calendar ID:', error);
+    return process.env.GOOGLE_CALENDAR_ID; // Fallback to environment variable
+  }
+}
+
 // Enhanced function to store reply in Zilliz with better error handling
 async function storeReplyInZilliz(emailData, trackingId, aiResponse = null) {
   try {
@@ -2148,14 +2179,16 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId, us
     const intent = aiResponse.intent;
     
     // Only proceed if Google Calendar API is configured
-    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_CALENDAR_ID) {
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
       console.log('⚠️ [CALENDAR] Google Calendar Service Account not configured, skipping auto-event creation');
       return { eventCreated: false, reason: 'Google Calendar Service Account not configured' };
     }
     
-    // Get user's timezone setting for calendar events
+    // Get user's timezone and calendar ID settings for calendar events
     const userTimezone = await getTimezoneFromSettings(userId);
+    const userCalendarId = await getCalendarIdFromSettings(userId);
     console.log('📅 [CALENDAR] Using user timezone for calendar:', userTimezone);
+    console.log('📅 [CALENDAR] Using user calendar ID:', userCalendarId);
     
     // Check if this email contains a confirmed meeting time
     const meetingTimeDetected = await detectConfirmedMeetingTime(emailBody, intent, userTimezone);
@@ -2189,7 +2222,7 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId, us
       await calendarManager.initialize();
     }
     
-    const result = await calendarManager.createGoogleCalendarEvent(eventDetails);
+    const result = await calendarManager.createGoogleCalendarEvent(eventDetails, userCalendarId);
     
     if (result.success) {
       console.log('✅ [CALENDAR] Calendar event created successfully');
