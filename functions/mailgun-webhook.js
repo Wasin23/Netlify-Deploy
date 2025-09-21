@@ -142,16 +142,28 @@ exports.handler = async function(event, context) {
       emailData.originalTrackingId = trackingId;
       emailData.userId = userId; // Add user ID to email data
       
-      // TEST #2: Enable ONLY AI generation, skip email sending and storage
-      console.log('🧪 [TEST #2] Testing AI generation only - no email sending or storage');
+      // TEST #3: Enable AI + Email sending, skip storage and calendar
+      console.log('🧪 [TEST #3] Testing AI + Email sending - no storage or calendar');
       
       // Generate AI response suggestion first (now with user-specific settings)
       try {
         aiResponse = await generateAIResponse(emailData, userId);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
-        console.log('🧪 [TEST] AI generation completed, skipping email/storage operations');
         
-        // Skip email sending and storage for this test
+        // Automatically send the AI response back to the customer
+        if (aiResponse && aiResponse.success && aiResponse.response) {
+          try {
+            const emailSent = await sendAutoResponse(emailData, aiResponse.response, trackingId);
+            aiResponse.emailSent = emailSent;
+            console.log('📧 [NETLIFY WEBHOOK] Auto-response sent:', emailSent.success);
+            console.log('🧪 [TEST #3] Email sending completed, skipping calendar and storage');
+            
+            // Skip calendar operations for this test
+          } catch (emailError) {
+            console.error('❌ [NETLIFY WEBHOOK] Failed to send auto-response:', emailError);
+            aiResponse.emailSent = { success: false, error: emailError.message };
+          }
+        }
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
         aiResponse = { error: error.message };
@@ -233,9 +245,9 @@ exports.handler = async function(event, context) {
       }
       */
       
-      // TEST: Skip storage operations for this test
-      console.log('🧪 [TEST #2] Skipping storage operations');
-      zillizResult = { success: true, message: "Storage skipped for AI-only testing" };
+      // TEST: Skip storage operations for this test  
+      console.log('🧪 [TEST #3] Skipping storage operations');
+      zillizResult = { success: true, message: "Storage skipped for AI+Email testing" };
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
     }
