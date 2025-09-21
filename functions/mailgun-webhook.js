@@ -142,17 +142,40 @@ exports.handler = async function(event, context) {
       emailData.originalTrackingId = trackingId;
       emailData.userId = userId; // Add user ID to email data
       
-      // TEST #4: Enable AI + Database storage, skip email sending  
-      console.log('🧪 [TEST #4] Testing AI + Database storage - no email sending');
+      // FAST WEBHOOK: Generate AI response and queue background tasks
+      console.log('🚀 [FAST WEBHOOK] Generating AI response and queuing background tasks');
       
       // Generate AI response suggestion first (now with user-specific settings)
       try {
         aiResponse = await generateAIResponse(emailData, userId);
         console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
-        console.log('🧪 [TEST #4] AI generation completed, skipping email sending');
         
-        // Skip email sending for this test - that's what caused the timeout
-        aiResponse.emailSent = { success: false, message: "Email sending skipped for testing" };
+        // Handle calendar integration immediately (this is fast)
+        if (aiResponse.intent) {
+          console.log('📅 [NETLIFY WEBHOOK] AI response has intent, attempting calendar event creation...');
+          console.log('📅 [NETLIFY WEBHOOK] Intent:', aiResponse.intent);
+          try {
+            const calendarResult = await handleCalendarEventCreation(emailData, aiResponse, trackingId);
+            console.log('📅 [NETLIFY WEBHOOK] Calendar creation result:', calendarResult);
+            if (calendarResult.eventCreated) {
+              console.log('📅 [NETLIFY WEBHOOK] Calendar event created successfully:', calendarResult.eventDetails);
+              aiResponse.calendarEvent = calendarResult;
+            } else {
+              console.log('📅 [NETLIFY WEBHOOK] Calendar event not created:', calendarResult.reason);
+              aiResponse.calendarEvent = calendarResult;
+            }
+          } catch (calendarError) {
+            console.error('❌ [NETLIFY WEBHOOK] Failed to create calendar event:', calendarError);
+            aiResponse.calendarEvent = { success: false, error: calendarError.message };
+          }
+        } else {
+          console.log('⚠️ [NETLIFY WEBHOOK] No intent in AI response, skipping calendar creation');
+        }
+        
+        // Queue email sending task (background processing)
+        const emailTask = await queueEmailTask(emailData, aiResponse, trackingId);
+        console.log('📧 [FAST WEBHOOK] Email task queued:', emailTask.success);
+        aiResponse.emailSent = { success: true, message: "Email queued for background processing", taskId: emailTask.taskId };
         
       } catch (error) {
         console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
@@ -235,19 +258,36 @@ exports.handler = async function(event, context) {
       }
       */
       
-      // TEST #4: Enable storage operations to test Zilliz database performance
-      console.log('🧪 [TEST #4] Testing database storage operations');
+      // FAST WEBHOOK: Queue storage operations for background processing
+      console.log('⚡ [FAST WEBHOOK] Queueing storage operations for background processing');
       try {
-        // Store the lead's original message
-        const leadMessageResult = await storeLeadMessage(emailData, trackingId);
-        console.log('💬 [NETLIFY WEBHOOK] Lead message stored:', leadMessageResult);
+        // Queue the lead's original message for storage
+        const leadMessageQueueResult = await queueStorageTask('lead_message', {
+          emailData,
+          trackingId,
+          messageType: 'lead_message'
+        });
+        console.log('� [NETLIFY WEBHOOK] Lead message queued for storage:', leadMessageQueueResult);
         
-        // Store AI response
-        zillizResult = await storeReplyInZilliz(emailData, trackingId, aiResponse);
-        console.log('💬 [NETLIFY WEBHOOK] AI response stored:', zillizResult);
+        // Queue AI response for storage
+        const aiResponseQueueResult = await queueStorageTask('ai_response', {
+          emailData,
+          trackingId,
+          aiResponse,
+          messageType: 'ai_response'
+        });
+        console.log('� [NETLIFY WEBHOOK] AI response queued for storage:', aiResponseQueueResult);
+        
+        zillizResult = { 
+          success: true, 
+          queued: true,
+          leadMessageTaskId: leadMessageQueueResult.taskId,
+          aiResponseTaskId: aiResponseQueueResult.taskId,
+          message: 'Storage operations queued for background processing'
+        };
       } catch (error) {
-        console.error('❌ [NETLIFY WEBHOOK] Failed to store conversation in Zilliz:', error);
-        zillizResult = { error: error.message, success: false };
+        console.error('❌ [NETLIFY WEBHOOK] Failed to queue storage operations:', error);
+        zillizResult = { error: error.message, success: false, queued: false };
       }
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
@@ -2744,6 +2784,99 @@ async function storeCalendarEventInZilliz(trackingId, calendarResult, meetingTim
     
   } catch (error) {
     console.error('❌ [CALENDAR] Failed to store calendar event in Zilliz:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// FAST ARCHITECTURE: Queue email task for background processing
+async function queueEmailTask(emailData, aiResponse, trackingId) {
+  try {
+    console.log('📧 [QUEUE] Queuing email task for background processing...');
+    
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('⚠️ [QUEUE] No Zilliz credentials, cannot queue email task');
+      return { success: false, error: 'Missing Zilliz credentials' };
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    const taskId = `email_${trackingId}_${Date.now()}`;
+    
+    const emailTaskData = {
+      id: taskId,
+      task_type: 'email_sending',
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      tracking_id: trackingId,
+      email_data: {
+        from: emailData.from,
+        to: emailData.from, // Reply to sender
+        subject: `Re: ${emailData.subject}`,
+        body: aiResponse.response || aiResponse.text,
+        original_message_id: emailData.messageId,
+        tracking_id: trackingId
+      },
+      ai_response: aiResponse,
+      dummy_vector: [0, 0] // Required for Zilliz
+    };
+
+    // Store in email_tasks collection
+    await client.insert({
+      collection_name: 'email_tasks',
+      data: [emailTaskData]
+    });
+    
+    console.log('✅ [QUEUE] Email task queued successfully:', taskId);
+    return { success: true, taskId: taskId };
+    
+  } catch (error) {
+    console.error('❌ [QUEUE] Failed to queue email task:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// FAST ARCHITECTURE: Queue database storage task for background processing  
+async function queueStorageTask(emailData, aiResponse, trackingId) {
+  try {
+    console.log('💾 [QUEUE] Queuing storage task for background processing...');
+    
+    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
+      console.log('⚠️ [QUEUE] No Zilliz credentials, cannot queue storage task');
+      return { success: false, error: 'Missing Zilliz credentials' };
+    }
+
+    const client = new MilvusClient({
+      address: process.env.ZILLIZ_ENDPOINT,
+      token: process.env.ZILLIZ_TOKEN
+    });
+
+    const taskId = `storage_${trackingId}_${Date.now()}`;
+    
+    const storageTaskData = {
+      id: taskId,
+      task_type: 'database_storage',
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      tracking_id: trackingId,
+      lead_message: emailData,
+      ai_response: aiResponse,
+      dummy_vector: [0, 0] // Required for Zilliz
+    };
+
+    // Store in storage_tasks collection
+    await client.insert({
+      collection_name: 'storage_tasks',
+      data: [storageTaskData]
+    });
+    
+    console.log('✅ [QUEUE] Storage task queued successfully:', taskId);
+    return { success: true, taskId: taskId };
+    
+  } catch (error) {
+    console.error('❌ [QUEUE] Failed to queue storage task:', error);
     return { success: false, error: error.message };
   }
 }
