@@ -15,7 +15,7 @@ async function testWebhook() {
   });
   console.log('');
   
-  // Simulate a Mailgun webhook POST request with the "6pm tomorrow" email
+  // Simulate a Mailgun webhook POST request with Central Time confirmation
   const testEvent = {
     httpMethod: 'POST',
     headers: {
@@ -25,17 +25,17 @@ async function testWebhook() {
       'From': 'cole@gmail.com',
       'To': 'replies@examarkchat.com',
       'Subject': 'Re: Pricing Inquiry',
-      'body-plain': 'hmmm, I guess i could set up a meeting. how about 6pm tomorrow?',
-      'Message-Id': '<test-message-id@gmail.com>',
-      'References': '<testuser_1726935600000_a1b2c3d4@examarkchat.com>',
-      'In-Reply-To': '<testuser_1726935600000_a1b2c3d4@examarkchat.com>'
+      'body-plain': 'I\'m in Central Time (CST), so 6pm tomorrow Central Time would work perfect! My calendar is set to PST timezone by the way.',
+      'Message-Id': '<test-message-id-3@gmail.com>',
+      'References': '<default_1726935600000_a1b2c3d4@examarkchat.com>',
+      'In-Reply-To': '<default_1726935600000_a1b2c3d4@examarkchat.com>'
     }).toString()
   };
 
-  console.log('📧 Simulating email:', {
+  console.log('📧 Simulating Central Time confirmation email:', {
     from: 'cole@gmail.com',
     subject: 'Re: Pricing Inquiry',
-    body: 'hmmm, I guess i could set up a meeting. how about 6pm tomorrow?'
+    body: 'I\'m in Central Time (CST), so 6pm tomorrow Central Time would work perfect! My calendar is set to PST timezone by the way.'
   });
   console.log('');
 
