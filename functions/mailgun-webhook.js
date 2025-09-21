@@ -142,17 +142,20 @@ exports.handler = async function(event, context) {
       emailData.originalTrackingId = trackingId;
       emailData.userId = userId; // Add user ID to email data
       
-      // TEST: Skip AI generation to test speed
-      console.log('🧪 [TEST] Skipping AI generation - testing basic webhook speed');
-      aiResponse = { 
-        success: true, 
-        response: "Test response - AI processing disabled for speed test", 
-        provider: "Test Mode - No AI",
-        intent: "test_mode"
-      };
+      // TEST #2: Enable ONLY AI generation, skip email sending and storage
+      console.log('🧪 [TEST #2] Testing AI generation only - no email sending or storage');
       
-      // TEST: Also skip email sending and storage for now
-      console.log('🧪 [TEST] Skipping email sending and storage operations');
+      // Generate AI response suggestion first (now with user-specific settings)
+      try {
+        aiResponse = await generateAIResponse(emailData, userId);
+        console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
+        console.log('🧪 [TEST] AI generation completed, skipping email/storage operations');
+        
+        // Skip email sending and storage for this test
+      } catch (error) {
+        console.error('❌ [NETLIFY WEBHOOK] Failed to generate AI response:', error);
+        aiResponse = { error: error.message };
+      }
       
       /*
       // Generate AI response suggestion first (now with user-specific settings)
@@ -230,9 +233,9 @@ exports.handler = async function(event, context) {
       }
       */
       
-      // TEST: Skip storage operations too
-      console.log('🧪 [TEST] Skipping storage operations');
-      zillizResult = { success: true, message: "Storage skipped for testing" };
+      // TEST: Skip storage operations for this test
+      console.log('🧪 [TEST #2] Skipping storage operations');
+      zillizResult = { success: true, message: "Storage skipped for AI-only testing" };
     } else {
       console.log('[NETLIFY WEBHOOK] No tracking ID found in reply');
     }
