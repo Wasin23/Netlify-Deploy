@@ -163,8 +163,8 @@ Looking forward to our conversation!`;
                 end: {
                     dateTime: eventDetails.endTime,
                     timeZone: eventDetails.timeZone || 'America/New_York'
-                },
-                attendees: eventDetails.attendees || []
+                }
+                // No attendees - just create event on your calendar
             };
 
             const response = await fetch(

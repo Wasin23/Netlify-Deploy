@@ -266,6 +266,13 @@ function extractTrackingId(formData, subject, body) {
       console.log('[EXTRACT] Found tracking ID in original Message-ID:', trackingMatch[1]);
       return trackingMatch[1];
     }
+    
+    // Look for user-specific tracking pattern: <userid_timestamp_hash@domain>
+    const userTrackingMatch = inReplyTo.match(/<([^@>]+)@/);
+    if (userTrackingMatch && userTrackingMatch[1].includes('_')) {
+      console.log('[EXTRACT] Found user tracking ID in Message-ID:', userTrackingMatch[1]);
+      return userTrackingMatch[1];
+    }
   }
 
   // Method 2: Look for tracking ID in References header
@@ -284,6 +291,13 @@ function extractTrackingId(formData, subject, body) {
     if (trackingMatch) {
       console.log('[EXTRACT] Found tracking ID in References original:', trackingMatch[1]);
       return trackingMatch[1];
+    }
+    
+    // Look for user-specific tracking pattern: <userid_timestamp_hash@domain>
+    const userTrackingMatch = references.match(/<([^@>]+)@/);
+    if (userTrackingMatch && userTrackingMatch[1].includes('_')) {
+      console.log('[EXTRACT] Found user tracking ID in References:', userTrackingMatch[1]);
+      return userTrackingMatch[1];
     }
   }
   
@@ -2171,9 +2185,6 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
     if (result.success) {
       console.log('✅ [CALENDAR] Calendar event created successfully');
       
-      // Store the event creation in Zilliz for tracking
-      await storeCalendarEventInZilliz(trackingId, result, meetingTimeDetected, leadInfo);
-      
       return {
         eventCreated: true,
         eventDetails: result,
@@ -2481,46 +2492,5 @@ Return only the JSON object, no other text.`;
   } catch (error) {
     console.error('📅 [CALENDAR] Error detecting meeting time:', error);
     return { found: false, reason: 'Error during meeting time detection' };
-  }
-}
-
-// Store calendar event information in Zilliz for tracking
-async function storeCalendarEventInZilliz(trackingId, calendarResult, meetingTime, leadInfo) {
-  try {
-    console.log('📅 [CALENDAR] Storing calendar event in Zilliz...');
-    
-    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
-      console.log('⚠️ [CALENDAR] Zilliz not configured, skipping storage');
-      return { success: false, reason: 'Zilliz not configured' };
-    }
-    
-    const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN
-    });
-    
-    const eventData = {
-      tracking_id: trackingId,
-      event_type: 'calendar_event_created',
-      timestamp: new Date().toISOString(),
-      user_agent: `Calendar_Event: ${calendarResult.event_id}`,
-      ip_address: '127.0.0.1',
-      email_address: leadInfo.email || 'Unknown',
-      recipient: 'ExaMark Team',
-      processed: true,
-      embedding: await createEmbedding(`Calendar event created for ${leadInfo.name} at ${meetingTime.startTime}`)
-    };
-    
-    await client.insert({
-      collection_name: 'email_tracking_events',
-      data: [eventData]
-    });
-    
-    console.log('✅ [CALENDAR] Calendar event stored in Zilliz successfully');
-    return { success: true, stored: true };
-    
-  } catch (error) {
-    console.error('❌ [CALENDAR] Failed to store calendar event in Zilliz:', error);
-    return { success: false, error: error.message };
   }
 }
