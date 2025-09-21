@@ -412,14 +412,101 @@ async function analyzeConversationState(originalEmailData, aiResponseText, track
   try {
     console.log('[CONVERSATION STATE] Analyzing conversation state...');
     
-    const emailBody = originalEmailData.body?.toLowerCase() || '';
-    const aiResponse = aiResponseText?.toLowerCase() || '';
+    const emailBody = originalEmailData.body || '';
+    const aiResponse = aiResponseText || '';
     
     // Get conversation history from Zilliz to count interactions
     const conversationHistory = await getConversationHistory(trackingId);
     const interactionCount = conversationHistory.length;
     
     console.log('[CONVERSATION STATE] Interaction count:', interactionCount);
+    
+    // Use AI to analyze conversation state if OpenAI is available
+    if (process.env.OPENAI_API_KEY) {
+      const aiAnalysis = await analyzeConversationStateWithAI(emailBody, aiResponse, interactionCount);
+      console.log('[CONVERSATION STATE] AI Analysis:', aiAnalysis);
+      return aiAnalysis;
+    }
+    
+    // Fallback to keyword detection if no OpenAI
+    return analyzeConversationStateWithKeywords(emailBody, aiResponse, interactionCount);
+    
+  } catch (error) {
+    console.error('[CONVERSATION STATE] Error analyzing state:', error);
+    // Default to safe behavior - continue conversation
+    return {
+      state: 'error',
+      shouldKeepOpen: true,
+      reason: 'Error in analysis, defaulting to continue'
+    };
+  }
+}
+
+// Smart AI-based conversation state analysis
+async function analyzeConversationStateWithAI(emailBody, aiResponse, interactionCount) {
+  const prompt = `Analyze this email conversation to determine the appropriate next action.
+
+CUSTOMER'S EMAIL: "${emailBody}"
+
+AI RESPONSE SENT: "${aiResponse}"
+
+INTERACTION COUNT: ${interactionCount}
+
+Determine the conversation state. Respond with ONLY one of these JSON objects:
+
+For EXPLICIT REJECTION (customer clearly not interested):
+{"state": "rejected", "shouldKeepOpen": false, "reason": "Customer declined or unsubscribed"}
+
+For CONFIRMED MEETING (specific time/date set or booking confirmed):
+{"state": "meeting_booked", "shouldKeepOpen": false, "reason": "Meeting successfully scheduled with specific time"}
+
+For ACTIVE ENGAGEMENT (customer asking questions, showing interest):
+{"state": "engaged", "shouldKeepOpen": true, "reason": "Customer actively engaging with questions"}
+
+For AUTO-RESPONDER (out of office, vacation message):
+{"state": "auto_responder", "shouldKeepOpen": false, "reason": "Automated out-of-office detected"}
+
+For INTERACTION LIMIT (too many back-and-forth, ${interactionCount} >= 5):
+{"state": "interaction_limit", "shouldKeepOpen": false, "reason": "Maximum interactions reached"}
+
+For NATURAL END (polite closure, thanks without further questions):
+{"state": "natural_end", "shouldKeepOpen": false, "reason": "Conversation naturally concluded"}
+
+IMPORTANT: Only mark as "meeting_booked" if there's a SPECIFIC time/date mentioned or clear confirmation. Questions like "should we schedule?" are NOT bookings.
+
+Respond with ONLY the JSON object, no other text.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 100
+      })
+    });
+
+    const data = await response.json();
+    const analysis = JSON.parse(data.choices[0].message.content.trim());
+    
+    console.log('[CONVERSATION STATE] AI analysis result:', analysis);
+    return analysis;
+
+  } catch (error) {
+    console.error('[CONVERSATION STATE] AI analysis failed:', error);
+    // Fallback to keyword detection
+    return analyzeConversationStateWithKeywords(emailBody, aiResponse, interactionCount);
+  }
+}
+
+// Fallback keyword-based analysis (used when OpenAI unavailable)
+async function analyzeConversationStateWithKeywords(emailBody, aiResponse, interactionCount) {
+  const emailBodyLower = emailBody.toLowerCase();
     
     // EXPLICIT REJECTION/UNSUBSCRIBE - End conversation immediately
     const rejectionKeywords = [
@@ -428,7 +515,7 @@ async function analyzeConversationState(originalEmailData, aiResponseText, track
       'don\'t contact', 'already have', 'satisfied with current'
     ];
     
-    const hasRejection = rejectionKeywords.some(keyword => emailBody.includes(keyword));
+    const hasRejection = rejectionKeywords.some(keyword => emailBodyLower.includes(keyword));
     if (hasRejection) {
       console.log('[CONVERSATION STATE] Rejection detected - ending conversation');
       return {
@@ -438,22 +525,22 @@ async function analyzeConversationState(originalEmailData, aiResponseText, track
       };
     }
     
-    // MEETING BOOKED - End conversation (success!)
-    const meetingBookedKeywords = [
-      'booked', 'scheduled', 'calendar', 'meeting set', 'talk soon',
-      'see you', 'looking forward', 'confirmed'
+    // MEETING BOOKED - Only for CONFIRMED bookings with specific times
+    const confirmedMeetingKeywords = [
+      'meeting is set for', 'booked for', 'confirmed for', 'scheduled for',
+      'see you at', 'meeting at', 'appointment at', 'call at',
+      'monday at', 'tuesday at', 'wednesday at', 'thursday at', 'friday at',
+      'pm on', 'am on', 'o\'clock'
     ];
     
-    const hasMeetingBooked = meetingBookedKeywords.some(keyword => 
-      emailBody.includes(keyword) || aiResponse.includes(keyword)
-    );
+    const hasMeetingBooked = confirmedMeetingKeywords.some(keyword => emailBodyLower.includes(keyword));
     
     if (hasMeetingBooked) {
-      console.log('[CONVERSATION STATE] Meeting booked - ending conversation');
+      console.log('[CONVERSATION STATE] Confirmed meeting detected - ending conversation');
       return {
         state: 'meeting_booked',
         shouldKeepOpen: false,
-        reason: 'Meeting successfully scheduled'
+        reason: 'Meeting successfully scheduled with specific time'
       };
     }
     
@@ -461,10 +548,10 @@ async function analyzeConversationState(originalEmailData, aiResponseText, track
     const engagementKeywords = [
       'tell me more', 'interested', 'question', 'when', 'how',
       'pricing', 'cost', 'demo', 'trial', 'can you', 'would like',
-      'more information', 'learn more', 'sounds good'
+      'more information', 'learn more', 'sounds good', 'should we schedule'
     ];
     
-    const hasEngagement = engagementKeywords.some(keyword => emailBody.includes(keyword));
+    const hasEngagement = engagementKeywords.some(keyword => emailBodyLower.includes(keyword));
     
     // INTERACTION LIMIT - Prevent infinite loops (max 5 interactions)
     if (interactionCount >= 5) {
@@ -482,7 +569,7 @@ async function analyzeConversationState(originalEmailData, aiResponseText, track
       'currently unavailable', 'away message'
     ];
     
-    const isAutoResponder = autoResponderKeywords.some(keyword => emailBody.includes(keyword));
+    const isAutoResponder = autoResponderKeywords.some(keyword => emailBodyLower.includes(keyword));
     if (isAutoResponder) {
       console.log('[CONVERSATION STATE] Auto-responder detected - ending conversation');
       return {
@@ -519,16 +606,6 @@ async function analyzeConversationState(originalEmailData, aiResponseText, track
       shouldKeepOpen: true,
       reason: 'First interaction, keeping conversation open'
     };
-    
-  } catch (error) {
-    console.error('[CONVERSATION STATE] Error analyzing state:', error);
-    // Default to safe behavior - continue conversation
-    return {
-      state: 'error',
-      shouldKeepOpen: true,
-      reason: 'Error in analysis, defaulting to continue'
-    };
-  }
 }
 
 // Get conversation history for a tracking ID
@@ -662,16 +739,37 @@ Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
       const messageId = `<ai-response-${trackingId}-${Date.now()}@${process.env.MAILGUN_DOMAIN}>`;
       params.append('h:Message-ID', messageId);
       
-      // Reference the original tracking email for threading
-      const originalMessageId = `<tracking-${trackingId}@${process.env.MAILGUN_DOMAIN}>`;
-      params.append('h:In-Reply-To', originalMessageId);
-      params.append('h:References', originalMessageId);
+      // Use the actual Message-ID from the incoming email for proper threading
+      const incomingMessageId = originalEmailData.messageId;
       
-      console.log('[AUTO RESPONSE] Adding tracking headers:', {
-        messageId,
-        inReplyTo: originalMessageId,
-        references: originalMessageId
-      });
+      if (incomingMessageId) {
+        // Reply to the actual incoming message
+        params.append('h:In-Reply-To', incomingMessageId);
+        
+        // Build References chain: original thread + this message
+        const existingReferences = originalEmailData.references || '';
+        const referencesChain = existingReferences 
+          ? `${existingReferences} ${incomingMessageId}`
+          : incomingMessageId;
+        params.append('h:References', referencesChain);
+        
+        console.log('[AUTO RESPONSE] Adding threading headers:', {
+          messageId,
+          inReplyTo: incomingMessageId,
+          references: referencesChain
+        });
+      } else {
+        // Fallback: try to reference the original tracking email
+        const originalMessageId = `<tracking-${trackingId}@${process.env.MAILGUN_DOMAIN}>`;
+        params.append('h:In-Reply-To', originalMessageId);
+        params.append('h:References', originalMessageId);
+        
+        console.log('[AUTO RESPONSE] Using fallback tracking headers:', {
+          messageId,
+          inReplyTo: originalMessageId,
+          references: originalMessageId
+        });
+      }
     }
     
     // CRITICAL: Add explicit Reply-To header to ensure replies go to correct address
