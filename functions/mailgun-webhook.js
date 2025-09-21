@@ -4,6 +4,9 @@ const crypto = require('crypto');
 // TOP-LEVEL IMPORT to prevent Netlify bundler from tree-shaking it out
 const { MilvusClient } = require('@zilliz/milvus2-sdk-node');
 
+// Import local calendar manager
+const { calendarManager } = require('./calendarIntegrationManager');
+
 // Enhanced Netlify serverless function for Mailgun webhooks with AI response generation
 exports.handler = async function(event, context) {
   console.log('[NETLIFY WEBHOOK] Received webhook:', {
@@ -1181,9 +1184,9 @@ Analyze this email reply and classify the sender's intent. Consider the context 
 Email content: "${emailContent}"
 
 Classify the intent as ONE of these categories:
-- meeting_request_positive: Wants to schedule a meeting/call
+- meeting_request_positive: Wants to schedule a meeting/call (e.g., "yes let's set up a meeting", "I'd like to schedule a call")
 - meeting_request_negative: Declines meeting but still engaged  
-- meeting_time_preference: Specifying preferred times/dates
+- meeting_time_preference: Specifying preferred times/dates (e.g., "how about 6pm tomorrow", "I could do Friday at 2pm", "tomorrow at 10am works")
 - calendar_booking_request: Asking for calendar link
 - technical_question: Asking how product/service works
 - pricing_question: Asking about costs, rates, pricing
@@ -1196,6 +1199,15 @@ Classify the intent as ONE of these categories:
 - unsubscribe_request: Wants to opt out
 - general_positive: Shows interest but no specific action
 - general_negative: Polite rejection or not interested
+
+IMPORTANT: If the email contains ANY specific time or date mention (like "6pm tomorrow", "Friday at 2pm", "next week at 10am"), classify it as "meeting_time_preference" even if it's not highly enthusiastic.
+
+Examples of "meeting_time_preference":
+- "hmmm, I guess i could set up a meeting. how about 6pm tomorrow?"
+- "maybe we can meet Friday at 2pm"
+- "I could do next Tuesday at 10am"
+- "how about tomorrow at 3pm?"
+- "I'm free Monday at 9am"
 
 Respond with just the intent category, nothing else.`;
 
@@ -1297,6 +1309,12 @@ Thank you for your interest in {{product_name}}! I'd be delighted to schedule a 
 
 Looking forward to our conversation!`,
 
+    'meeting_time_preference': `Hi {{lead_name}},
+
+Perfect! That time works well for me. I'd be happy to set up our meeting to discuss how {{company_name}} can help {{lead_company}}.
+
+I'll send over a calendar invite to confirm the details.`,
+
     'pricing_question': `Hi {{lead_name}},
 
 Great question about pricing! {{product_name}} is designed to provide excellent value through:
@@ -1327,7 +1345,15 @@ Thank you for your interest in {{product_name}}! I'm excited to help {{lead_comp
 
 {{#meeting_suggestion}}I'd love to set up a meeting at some point so a salesperson can speak with you about your specific needs.{{/meeting_suggestion}}
 
-{{#calendar_link}}Feel free to book a time that works for you: {{calendar_link}}{{/calendar_link}}`
+{{#calendar_link}}Feel free to book a time that works for you: {{calendar_link}}{{/calendar_link}}`,
+
+    'meeting_time_preference': `Hi {{lead_name}},
+
+Perfect! I'd be happy to schedule a meeting with you. That time sounds great, but just to confirm - what time zone are you in? This helps me schedule it correctly on my calendar.
+
+Once I have your timezone, I'll send over a calendar invite with all the details.
+
+Looking forward to our conversation!`
   };
 
   // Return specific template or fallback to general positive
@@ -2135,9 +2161,7 @@ async function handleCalendarEventCreation(emailData, aiResponse, trackingId) {
       timeZoneNeedsConfirmation: meetingTimeDetected.suggestTimeZoneConfirmation || false
     };
     
-    // Import and use calendar manager
-    const { calendarManager } = await import('../../utils/calendarIntegrationManager.js');
-    
+    // Use local calendar manager
     if (!calendarManager.initialized) {
       await calendarManager.initialize();
     }
@@ -2181,16 +2205,27 @@ async function detectConfirmedMeetingTime(emailBody, intent, defaultTimezone = '
     console.log('📅 [CALENDAR] Analyzing email content for meeting times...');
     console.log('📅 [CALENDAR] Using default timezone:', defaultTimezone);
     
-    // Quick keyword check first
+    // Quick keyword check first + simplified regex check
     const emailLower = emailBody.toLowerCase();
     const timeKeywords = [
       'tomorrow at', 'today at', 'monday at', 'tuesday at', 'wednesday at', 'thursday at', 'friday at',
-      'pm on', 'am on', "o'clock", 'meeting at', 'call at', 'scheduled for', 'booked for'
+      'pm on', 'am on', "o'clock", 'meeting at', 'call at', 'scheduled for', 'booked for', 'how about', 'at ', 'pm', 'am'
     ];
     
     const hasTimeKeywords = timeKeywords.some(keyword => emailLower.includes(keyword));
     
-    if (!hasTimeKeywords && intent !== 'meeting_time_preference') {
+    // Also try our calendar manager's parsing function as backup
+    let calendarManagerResult = null;
+    try {
+      calendarManagerResult = calendarManager.parseMeetingTime(emailBody, emailBody, defaultTimezone);
+      if (calendarManagerResult && calendarManagerResult.found) {
+        console.log('📅 [CALENDAR] Calendar manager found meeting time:', calendarManagerResult);
+      }
+    } catch (calendarError) {
+      console.warn('⚠️ [CALENDAR] Calendar manager parsing failed:', calendarError);
+    }
+    
+    if (!hasTimeKeywords && intent !== 'meeting_time_preference' && !calendarManagerResult?.found) {
       return { found: false, reason: 'No time-related keywords found' };
     }
     
@@ -2420,6 +2455,25 @@ Return only the JSON object, no other text.`;
           source: 'regex_parsed'
         };
       }
+    }
+    
+    // Final fallback: Use calendar manager's parsing result if we have one
+    if (calendarManagerResult && calendarManagerResult.found) {
+      console.log('📅 [CALENDAR] Using calendar manager parsing result as fallback');
+      
+      const startTime = new Date(calendarManagerResult.datetime);
+      const endTime = new Date(startTime.getTime() + 30 * 60000); // 30 minute default
+      
+      return {
+        found: true,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        timeZone: calendarManagerResult.timezone || defaultTimezone,
+        confidence: 'medium',
+        source: 'calendar_manager_parsed',
+        timeZoneSpecified: false,
+        suggestTimeZoneConfirmation: calendarManagerResult.needs_timezone_confirmation || true
+      };
     }
     
     return { found: false, reason: 'No parseable meeting time found' };
