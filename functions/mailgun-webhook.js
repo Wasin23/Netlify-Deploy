@@ -982,12 +982,14 @@ Message ID: ${trackingId} | Conversation State: ${conversationState.state}`;
     // CRITICAL: Add tracking-aware headers for conversation threading
     if (trackingId) {
       // Custom Message-ID that includes tracking ID
-      const messageId = `<ai-response-${trackingId}-${Date.now()}@${process.env.MAILGUN_DOMAIN}>`;
+      // Check if trackingId already has ai-response prefix to avoid duplication
+      const cleanTrackingId = trackingId.startsWith('ai-response-') ? trackingId.substring(12) : trackingId;
+      const messageId = `<ai-response-${cleanTrackingId}-${Date.now()}@${process.env.MAILGUN_DOMAIN}>`;
       params.append('h:Message-ID', messageId);
       
       // For proper threading, we need to reference the original outbound email's Message-ID
-      // The original outbound email should have had Message-ID: <tracking-${trackingId}@${domain}>
-      const originalOutboundMessageId = `<tracking-${trackingId}@${process.env.MAILGUN_DOMAIN}>`;
+      // The original outbound email should have had Message-ID: <tracking-${cleanTrackingId}@${domain}>
+      const originalOutboundMessageId = `<tracking-${cleanTrackingId}@${process.env.MAILGUN_DOMAIN}>`;
       
       // Use the actual Message-ID from the incoming reply if available
       const incomingMessageId = originalEmailData.messageId;
