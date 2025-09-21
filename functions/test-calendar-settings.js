@@ -39,6 +39,15 @@ async function getCalendarIdFromSettings(userId = 'default') {
 exports.handler = async (event, context) => {
   console.log('🧪 [TEST-CALENDAR-ID] Starting calendar ID lookup test');
   
+  const logs = [];
+  
+  // Capture console logs
+  const originalLog = console.log;
+  console.log = (...args) => {
+    logs.push(args.join(' '));
+    originalLog(...args);
+  };
+  
   try {
     const userId = 'default';
     console.log('👤 [TEST-CALENDAR-ID] Testing calendar ID lookup for user:', userId);
@@ -46,6 +55,9 @@ exports.handler = async (event, context) => {
     const calendarId = await getCalendarIdFromSettings(userId);
     
     console.log('📅 [TEST-CALENDAR-ID] Final result:', calendarId);
+    
+    // Restore console.log
+    console.log = originalLog;
     
     return {
       statusCode: 200,
@@ -60,12 +72,16 @@ exports.handler = async (event, context) => {
         calendarId: calendarId,
         calendarIdFound: !!calendarId,
         hasEnvironmentVariable: !!process.env.GOOGLE_CALENDAR_ID,
+        logs: logs,
         timestamp: new Date().toISOString()
       })
     };
     
   } catch (error) {
     console.error('❌ [TEST-CALENDAR-ID] Error:', error);
+    
+    // Restore console.log
+    console.log = originalLog;
     
     return {
       statusCode: 500,
@@ -77,6 +93,7 @@ exports.handler = async (event, context) => {
         success: false,
         error: error.message,
         stack: error.stack,
+        logs: logs,
         timestamp: new Date().toISOString()
       })
     };
