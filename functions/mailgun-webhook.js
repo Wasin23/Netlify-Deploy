@@ -106,17 +106,22 @@ exports.handler = async function(event, context) {
     // Try to extract tracking ID to link this reply to original email
     const trackingId = extractTrackingId(formData, emailData.subject, emailData.body);
     
+    // Extract user ID from tracking ID for user-specific settings
+    const userId = extractUserIdFromTrackingId(trackingId);
+    console.log('[NETLIFY WEBHOOK] Using settings for user:', userId);
+    
     let zillizResult = null;
     let aiResponse = null;
     
     if (trackingId) {
       console.log('[NETLIFY WEBHOOK] Found tracking ID:', trackingId);
       emailData.originalTrackingId = trackingId;
+      emailData.userId = userId; // Add user ID to email data
       
-      // Generate AI response suggestion first
+      // Generate AI response suggestion first (now with user-specific settings)
       try {
-        aiResponse = await generateAIResponse(emailData);
-        console.log('🤖 [NETLIFY WEBHOOK] AI response generated');
+        aiResponse = await generateAIResponse(emailData, userId);
+        console.log('🤖 [NETLIFY WEBHOOK] AI response generated for user:', userId);
         
         // Automatically send the AI response back to the customer
         if (aiResponse && aiResponse.success && aiResponse.response) {
@@ -354,15 +359,36 @@ async function createEmbedding(text) {
   }
 }
 
-// Fetch timezone from lead agent settings
-async function getTimezoneFromSettings() {
+// Extract user ID from tracking ID format: userId_timestamp_hash
+function extractUserIdFromTrackingId(trackingId) {
   try {
-    console.log('[SETTINGS] Fetching timezone from lead agent settings...');
+    if (!trackingId) return 'default';
+    
+    // Format: userId_timestamp_hash
+    const parts = trackingId.split('_');
+    if (parts.length >= 3) {
+      const userId = parts[0];
+      console.log('[USER ID] Extracted from tracking ID:', userId);
+      return userId;
+    }
+    
+    console.log('[USER ID] Could not parse tracking ID, using default:', trackingId);
+    return 'default';
+  } catch (error) {
+    console.error('[USER ID] Error extracting user ID:', error);
+    return 'default';
+  }
+}
+
+// Fetch timezone from lead agent settings
+async function getTimezoneFromSettings(userId = 'default') {
+  try {
+    console.log('[SETTINGS] Fetching timezone from lead agent settings for user:', userId);
     
     // Try to load settings from the same source as agent settings
     let agentSettings = {};
     try {
-      agentSettings = await loadAgentSettings();
+      agentSettings = await loadAgentSettings(userId);
       if (agentSettings.timezone) {
         console.log('[SETTINGS] Found timezone in agent settings:', agentSettings.timezone);
         return agentSettings.timezone;
@@ -1026,7 +1052,7 @@ function extractLeadInfo(emailData) {
 
 // Function to generate AI response suggestions
 // Enhanced AI Response Generation with Smart Intent Classification
-async function generateAIResponse(emailData) {
+async function generateAIResponse(emailData, userId = 'default') {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return generateRuleBasedResponse(emailData);
@@ -1034,13 +1060,13 @@ async function generateAIResponse(emailData) {
 
     console.log('🤖 [SMART AI] Generating enhanced AI response...');
     
-    // Step 1: Load agent settings from Zilliz
+    // Step 1: Load agent settings from Zilliz for specific user
     let agentSettings = {};
     try {
-      agentSettings = await loadAgentSettings();
-      console.log('⚙️ [SMART AI] Loaded agent settings:', Object.keys(agentSettings));
+      agentSettings = await loadAgentSettings(userId);
+      console.log('⚙️ [SMART AI] Loaded agent settings for user:', userId, Object.keys(agentSettings));
     } catch (error) {
-      console.error('⚠️ [SMART AI] Failed to load settings, using defaults:', error);
+      console.error('⚠️ [SMART AI] Failed to load settings for user:', userId, error);
       agentSettings = getDefaultSettings();
     }
     
@@ -1057,7 +1083,7 @@ async function generateAIResponse(emailData) {
     console.log('👤 [SMART AI] Lead info extracted:', leadInfo);
     
     // Step 5: Generate context-aware response with template engine
-    const response = await generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo);
+    const response = await generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo, userId);
     
     return {
       success: true,
@@ -1161,7 +1187,7 @@ Respond with just the sentiment word, nothing else.`;
 }
 
 // Enhanced Context-Aware Response Generation with Template Engine
-async function generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo) {
+async function generateContextAwareResponseWithTemplate(emailData, intent, sentiment, agentSettings, leadInfo, userId = 'default') {
   try {
     // Get appropriate template based on intent
     const template = getResponseTemplate(intent, sentiment, agentSettings);
@@ -1176,7 +1202,7 @@ async function generateContextAwareResponseWithTemplate(emailData, intent, senti
 
     // If we have OpenAI, enhance the template with AI
     if (process.env.OPENAI_API_KEY && agentSettings.response_tone !== 'template_only') {
-      return await enhanceResponseWithAI(personalizedResponse, emailData, intent, sentiment, agentSettings);
+      return await enhanceResponseWithAI(personalizedResponse, emailData, intent, sentiment, agentSettings, userId);
     }
 
     return personalizedResponse;
@@ -1309,9 +1335,9 @@ function applyTemplateSubstitutions(template, variables) {
 }
 
 // Enhance template response with AI for better personalization
-async function enhanceResponseWithAI(templateResponse, emailData, intent, sentiment, settings) {
-  // First, get the timezone from settings
-  const defaultTimezone = await getTimezoneFromSettings();
+async function enhanceResponseWithAI(templateResponse, emailData, intent, sentiment, settings, userId = 'default') {
+  // First, get the timezone from settings for this user
+  const defaultTimezone = await getTimezoneFromSettings(userId);
   
   // Then, check if this email contains a meeting time that needs timezone confirmation
   let timeZoneConfirmationNeeded = false;
@@ -2002,67 +2028,6 @@ async function storeLeadMessage(emailData, trackingId) {
       error: error.message, 
       stored: false 
     };
-  }
-}
-
-// Load agent settings from Zilliz
-async function loadAgentSettings() {
-  try {
-    if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
-      console.log('[AGENT SETTINGS] Missing Zilliz credentials, using defaults');
-      return getDefaultResponseSettings();
-    }
-
-    const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_TOKEN
-    });
-
-    const collectionName = 'agent_settings';
-    
-    // Query all settings
-    const results = await client.query({
-      collection_name: collectionName,
-      filter: 'setting_key != ""',
-      output_fields: ['setting_key', 'setting_value'],
-      limit: 100
-    });
-
-    if (!results.data || results.data.length === 0) {
-      console.log('[AGENT SETTINGS] No settings found, using defaults');
-      return getDefaultResponseSettings();
-    }
-
-    // Convert array of settings back to nested object
-    const settings = getDefaultResponseSettings(); // Start with defaults
-    
-    results.data.forEach(item => {
-      const key = item.setting_key;
-      let value;
-      
-      try {
-        value = JSON.parse(item.setting_value);
-      } catch {
-        value = item.setting_value; // Keep as string if not JSON
-      }
-      
-      // Map settings back to nested structure
-      if (key === 'company_name') settings.company_info.name = value;
-      else if (key === 'product_name') settings.company_info.product_name = value;
-      else if (key === 'value_props') settings.company_info.value_props = value;
-      else if (key === 'calendar_link') settings.company_info.calendar_link = value;
-      else if (key === 'response_tone') settings.response_style.tone = value;
-      else if (key === 'meeting_pushiness') settings.response_style.meeting_pushiness = value;
-      else if (key === 'technical_depth') settings.response_style.technical_depth = value;
-      else if (key === 'followup_frequency') settings.response_style.followup_frequency = value;
-    });
-
-    console.log('[AGENT SETTINGS] Loaded settings from Zilliz');
-    return settings;
-
-  } catch (error) {
-    console.error('[AGENT SETTINGS] Failed to load from Zilliz:', error);
-    return getDefaultResponseSettings();
   }
 }
 
