@@ -758,6 +758,19 @@ async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
       };
     }
 
+    // Extract user ID for user-specific settings
+    const userId = extractUserIdFromTrackingId(trackingId);
+    
+    // Load user-specific settings for email signature
+    let agentSettings = {};
+    try {
+      agentSettings = await loadAgentSettings(userId);
+      console.log('⚙️ [AUTO RESPONSE] Loaded settings for user:', userId);
+    } catch (error) {
+      console.error('⚠️ [AUTO RESPONSE] Failed to load settings for user:', userId, error);
+      agentSettings = getDefaultSettings();
+    }
+
     // Determine conversation state and appropriate reply-to address
     const conversationState = await analyzeConversationState(originalEmailData, aiResponseText, trackingId);
     const shouldKeepConversationOpen = conversationState.shouldKeepOpen;
@@ -782,35 +795,70 @@ async function sendAutoResponse(originalEmailData, aiResponseText, trackingId) {
       hasAiResponse: !!aiResponseText,
       responseLength: aiResponseText?.length,
       conversationState: conversationState.state,
-      keepOpen: shouldKeepConversationOpen
+      keepOpen: shouldKeepConversationOpen,
+      userId: userId
     });
     
-    // Generate conversation-state-aware footer message
+    // Extract lead company from original email for better personalization
+    const leadCompany = extractLeadCompany(originalEmailData);
+    
+    // Generate user-specific footer message
     let footerMessage = '';
+    const aiAssistantName = agentSettings.ai_assistant_name || 'ExaMark AI Assistant';
+    const companyName = agentSettings.company_name || 'ExaMark';
+    const showAiDisclaimer = agentSettings.show_ai_disclaimer !== false; // Default true
+    
     if (shouldKeepConversationOpen) {
-      footerMessage = `---
-This is an AI-powered response from ExaMark. Feel free to reply with any questions - I'm here to help!
+      // Update the meeting suggestion to be more sales-focused
+      const meetingSuggestion = `I'd love to set up a meeting at some point so a salesperson can speak with you about it.`;
+      
+      if (showAiDisclaimer) {
+        footerMessage = `---
+This is an AI-powered response from ${aiAssistantName}. Feel free to reply with any questions - I'm here to help!
 
 Best regards,
-ExaMark AI Assistant
-Exabits Team`;
+${aiAssistantName}
+${companyName} Team`;
+      } else {
+        // No AI disclaimer, just simple signature
+        footerMessage = `Best regards,
+${aiAssistantName}
+${companyName} Team`;
+      }
     } else {
       // Conversation ending - provide direct contact info
       const endingReason = conversationState.state === 'meeting_booked' 
         ? 'Thank you for your interest! We look forward to our upcoming conversation.'
         : 'If you need further assistance, please feel free to reach out to our team directly.';
       
-      footerMessage = `---
+      if (showAiDisclaimer) {
+        footerMessage = `---
 ${endingReason}
 
 For immediate assistance, contact us directly at: support@exabits.ai
 
 Best regards,
-ExaMark AI Assistant
-Exabits Team`;
+${aiAssistantName}
+${companyName} Team`;
+      } else {
+        footerMessage = `${endingReason}
+
+For immediate assistance, contact us directly at: support@exabits.ai
+
+Best regards,
+${aiAssistantName}
+${companyName} Team`;
+      }
     }
     
-    const textContent = `${aiResponseText}
+    // Update "Gmail" references to use actual lead company
+    let personalizedResponse = aiResponseText;
+    if (leadCompany && personalizedResponse.includes('Gmail')) {
+      personalizedResponse = personalizedResponse.replace(/\bGmail\b/g, leadCompany);
+      console.log('[AUTO RESPONSE] Replaced Gmail with:', leadCompany);
+    }
+    
+    const textContent = `${personalizedResponse}
 
 ${footerMessage}
 
@@ -1008,6 +1056,7 @@ function getDefaultSettings() {
   return {
     company_name: 'Our Company',
     product_name: 'Our Solution',
+    ai_assistant_name: 'ExaMark AI Assistant',
     value_propositions: ['Industry-leading performance', '24/7 expert support', 'Seamless integration'],
     calendar_link: '',
     response_tone: 'professional_friendly',
@@ -1015,7 +1064,8 @@ function getDefaultSettings() {
     technical_depth: 'medium',
     question_threshold: 2,
     positive_immediate_booking: false,
-    complex_question_escalation: true
+    complex_question_escalation: true,
+    show_ai_disclaimer: true
   };
 }
 
@@ -1048,6 +1098,28 @@ function extractLeadInfo(emailData) {
     lead_company: leadCompany || '',
     lead_email: fromEmail
   };
+}
+
+// Extract lead company specifically for personalization
+function extractLeadCompany(emailData) {
+  const fromEmail = emailData.from || '';
+  
+  // Extract company from email domain
+  const domainMatch = fromEmail.match(/@([^.]+\.[^.]+)/);
+  if (domainMatch) {
+    let domain = domainMatch[1];
+    
+    // Handle common patterns
+    if (domain.includes('gmail.com')) return 'Gmail';
+    if (domain.includes('outlook.com') || domain.includes('hotmail.com')) return 'Microsoft';
+    if (domain.includes('yahoo.com')) return 'Yahoo';
+    
+    // For business domains, extract company name
+    const companyPart = domain.split('.')[0];
+    return companyPart.charAt(0).toUpperCase() + companyPart.slice(1);
+  }
+  
+  return null;
 }
 
 // Function to generate AI response suggestions
@@ -1221,12 +1293,9 @@ function getResponseTemplate(intent, sentiment, settings) {
 Thank you for your interest in {{product_name}}! I'd be delighted to schedule a meeting to discuss how {{company_name}} can help {{lead_company}}.
 
 {{#calendar_link}}Here's my calendar link to book a time that works for you: {{calendar_link}}{{/calendar_link}}
-{{^calendar_link}}I'll send over some available times shortly.{{/calendar_link}}
+{{^calendar_link}}I'd love to set up a meeting at some point so a salesperson can speak with you about it.{{/calendar_link}}
 
-Looking forward to our conversation!
-
-Best regards,
-{{company_name}} Team`,
+Looking forward to our conversation!`,
 
     'pricing_question': `Hi {{lead_name}},
 
@@ -1236,12 +1305,9 @@ Great question about pricing! {{product_name}} is designed to provide excellent 
 • {{.}}
 {{/value_propositions}}
 
-I'd love to discuss pricing details and show you how we can deliver {{value_proposition_summary}} for {{lead_company}}.
+I'd love to set up a meeting at some point so a salesperson can speak with you about pricing details and show you how we can deliver {{value_proposition_summary}} for {{lead_company}}.
 
-{{#calendar_link}}Would you like to schedule a quick 15-minute call? {{calendar_link}}{{/calendar_link}}
-
-Best regards,
-{{company_name}} Team`,
+{{#calendar_link}}Would you like to schedule a quick 15-minute call? {{calendar_link}}{{/calendar_link}}`,
 
     'technical_question': `Hi {{lead_name}},
 
@@ -1251,23 +1317,17 @@ Excellent technical question! {{product_name}} handles this through our {{techni
 {{technical_details}}
 {{/technical_details}}
 
-{{#complex_question_escalation}}I'd be happy to arrange a technical deep-dive session with our engineering team to cover all the details.{{/complex_question_escalation}}
+{{#complex_question_escalation}}I'd love to set up a meeting at some point so a salesperson can speak with you about the technical details and arrange a deep-dive session with our engineering team.{{/complex_question_escalation}}
 
-{{#calendar_link}}Here's my calendar if you'd like to discuss further: {{calendar_link}}{{/calendar_link}}
-
-Best regards,
-{{company_name}} Team`,
+{{#calendar_link}}Here's my calendar if you'd like to discuss further: {{calendar_link}}{{/calendar_link}}`,
 
     'general_positive': `Hi {{lead_name}},
 
 Thank you for your interest in {{product_name}}! I'm excited to help {{lead_company}} achieve {{value_proposition_summary}}.
 
-{{#meeting_suggestion}}Would you be interested in a brief 15-minute call to discuss your specific needs?{{/meeting_suggestion}}
+{{#meeting_suggestion}}I'd love to set up a meeting at some point so a salesperson can speak with you about your specific needs.{{/meeting_suggestion}}
 
-{{#calendar_link}}Feel free to book a time that works for you: {{calendar_link}}{{/calendar_link}}
-
-Best regards,
-{{company_name}} Team`
+{{#calendar_link}}Feel free to book a time that works for you: {{calendar_link}}{{/calendar_link}}`
   };
 
   // Return specific template or fallback to general positive
@@ -1382,6 +1442,8 @@ GUIDELINES:
 - Maintain ${settings.response_tone} tone
 - Don't add new promises or information not in template
 - Keep it concise and professional
+- When suggesting meetings, use professional language like "I'd love to set up a meeting at some point so a salesperson can speak with you about it" instead of "chat"
+- Replace generic references like "Gmail" with the actual company name from the lead's email domain
 ${timeZoneConfirmationNeeded ? '- MUST include the timezone confirmation question' : ''}
 
 Enhanced response:`;
@@ -1420,11 +1482,12 @@ Enhanced response:`;
 function generateFallbackResponse(intent, settings) {
   const companyName = settings.company_name || 'our company';
   const productName = settings.product_name || 'our solution';
+  const aiAssistantName = settings.ai_assistant_name || 'ExaMark AI Assistant';
   
-  return `Thank you for your interest in ${productName}! I'd be happy to help you learn more about how ${companyName} can assist you. I'll follow up with more details shortly.
+  return `Thank you for your interest in ${productName}! I'd love to set up a meeting at some point so a salesperson can speak with you about how ${companyName} can assist you.
 
 Best regards,
-${companyName} Team`;
+${aiAssistantName}`;
 }
 
 // Get response settings from Zilliz (with fallback to defaults)
