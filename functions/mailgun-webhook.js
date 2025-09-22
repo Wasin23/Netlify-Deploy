@@ -1,6 +1,8 @@
 // LangChain-powered Email Automation Agent
 import { ChatOpenAI } from "@langchain/openai";
 import { DynamicStructuredTool } from "langchain/tools";
+import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
+import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
 import { z } from "zod";
 import { MilvusClient } from "@zilliz/milvus2-sdk-node";
 import crypto from 'crypto';
@@ -463,16 +465,28 @@ const model = new ChatOpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const SYSTEM_PROMPT = `You are an AI-powered sales assistant. Your job is to:
+const SYSTEM_PROMPT = `You are an AI-powered sales assistant with access to tools. Your job is to:
 
-1. Respond professionally to prospect emails
-2. Use company information from your settings when available
-3. When someone proposes a meeting time, acknowledge it and confirm you'll send a calendar invite
-4. Keep responses natural, helpful, and business-appropriate
+1. ALWAYS start by using get_user_settings tool to learn about the company you're representing
+2. Respond professionally to prospect emails using the company information
+3. When someone proposes a meeting time, use create_calendar_event tool to schedule it
+4. Use send_email tool to reply to prospects
+5. Use store_event tool to log interactions
 
-Important: Write normal business emails only. Never include technical data, JSON, or system information in your responses. The system handles calendar creation automatically.
+IMPORTANT RULES:
+- ALWAYS use tools when appropriate - this is critical for system functionality
+- When you see meeting time proposals like "tomorrow at 3pm EST", create the calendar event immediately
+- Write natural business emails, never include technical data or JSON in email content
+- Use company information from settings to personalize your responses
 
-Use the get_user_settings tool to learn about the company you're representing, then respond accordingly.`;
+Tools available:
+- get_user_settings: Get company info and settings
+- create_calendar_event: Schedule meetings when times are proposed
+- send_email: Send professional replies
+- store_event: Log interactions
+- get_conversation: View conversation history
+
+Use these tools actively to provide excellent sales support.`;
 
 // === MAIN HANDLER ===
 
@@ -552,83 +566,57 @@ export async function handler(event) {
     
     console.log('[WEBHOOK] Calling LangChain agent...');
     
-    // Use a simple string prompt for compatibility
-    const prompt = `${SYSTEM_PROMPT}
+    // Set up the LangChain agent properly
+    const model = new ChatOpenAI({
+      temperature: 0.1,
+      modelName: "gpt-4o-mini",
+      openAIApiKey: process.env.OPENAI_API_KEY
+    });
+    
+    // Create agent tools array
+    const tools = [
+      getConversationTool,
+      getUserSettingsTool,
+      createCalendarEventTool,
+      sendEmailTool,
+      storeEventTool
+    ];
+    
+    // Create the prompt template for the agent
+    const prompt = ChatPromptTemplate.fromMessages([
+      ["system", SYSTEM_PROMPT],
+      ["user", "{input}"],
+      new MessagesPlaceholder("agent_scratchpad")
+    ]);
+    
+    // Create the agent
+    const agent = await createOpenAIFunctionsAgent({
+      llm: model,
+      tools: tools,
+      prompt: prompt
+    });
+    
+    // Create the agent executor
+    const agentExecutor = new AgentExecutor({
+      agent: agent,
+      tools: tools,
+      verbose: true,
+      maxIterations: 5
+    });
+    
+    // Execute the agent with proper input
+    const input = `Email from: ${emailData.from}
+Subject: ${emailData.subject}
+Body: ${emailData.body}
+Tracking ID: ${trackingId}
 
-Incoming Email Data:
-${JSON.stringify(agentInput)}
-
-Please analyze this email and provide a professional response. If the user is proposing a meeting time, indicate that a calendar invite will be sent.`;
-
-    const agentResponse = await model.invoke(prompt);
+Please process this email appropriately. If it contains a meeting request or time proposal, create a calendar event AND send a professional reply.`;
+    
+    const agentResponse = await agentExecutor.invoke({
+      input: input
+    });
     
     console.log('[WEBHOOK] Agent response:', agentResponse);
-    
-    // Extract the response text
-    const responseText = agentResponse.content || agentResponse.text || agentResponse || "Thank you for your email!";
-    
-    // Simple logic: if response mentions time/meeting, try to extract and create calendar
-    const hasTimeProposal = /\b(tomorrow|today|\d+\s?(pm|am|PST|EST)|\d+:\d+)/i.test(emailData.body);
-    
-    if (hasTimeProposal) {
-      console.log('[WEBHOOK] Detected time proposal, attempting calendar creation...');
-      
-      // Get user settings first to find correct calendar
-      console.log('[WEBHOOK] Getting user settings for tracking ID:', trackingId);
-      const userSettings = await getUserSettingsTool.func({ tracking_id: trackingId });
-      console.log('[WEBHOOK] User settings result:', userSettings);
-      
-      const settings = JSON.parse(userSettings);
-      console.log('[WEBHOOK] Parsed settings:', settings);
-      console.log('[WEBHOOK] Using calendar_id:', settings.calendar_id);
-      
-      // Create a basic calendar event (simplified for now)
-      try {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(15, 0, 0, 0); // 3 PM
-        
-        const endTime = new Date(tomorrow);
-        endTime.setHours(16, 0, 0, 0); // 4 PM
-        
-        const calendarResult = await createCalendarEventTool.func({
-          calendar_id: settings.calendar_id || 'primary',
-          start_time: tomorrow.toISOString(),
-          end_time: endTime.toISOString(),
-          title: `Sales Discussion with ${emailData.from}`,
-          attendees: [], // No attendees - service account doesn't have permission
-          timezone: 'America/Los_Angeles'
-        });
-        
-        console.log('[WEBHOOK] Calendar creation attempted with calendar_id:', settings.calendar_id);
-        console.log('[WEBHOOK] Calendar result:', calendarResult);
-      } catch (calError) {
-        console.error('[WEBHOOK] Calendar creation failed:', calError);
-      }
-    }
-    
-    // Send a reply
-    const replySubject = emailData.subject.startsWith('Re:') ? emailData.subject : `Re: ${emailData.subject}`;
-    
-    const emailResult = await sendEmailTool.func({
-      to: emailData.from,
-      subject: replySubject,
-      body: responseText || "Thank you for your email! I'll get back to you shortly.",
-      in_reply_to: emailData.messageId,
-      references: emailData.references || emailData.messageId,
-      tracking_id: trackingId
-    });
-    
-    console.log('[WEBHOOK] Email result:', emailResult);
-    
-    // Store the AI response
-    await storeEventTool.func({
-      tracking_id: trackingId,
-      event_type: 'ai_reply',
-      user_agent: `AI_Response: ${responseText}`,
-      email_address: emailData.from,
-      recipient: emailData.to
-    });
     
     console.log('[WEBHOOK] Agent processing completed');
     
@@ -639,7 +627,7 @@ Please analyze this email and provide a professional response. If the user is pr
         success: true,
         processed: true,
         tracking_id: trackingId,
-        agent_response: typeof agentResponse.content === 'string' ? agentResponse.content.substring(0, 200) : 'Tools executed'
+        agent_response: agentResponse.output || 'Agent executed successfully'
       })
     };
     
