@@ -444,19 +444,27 @@ const model = new ChatOpenAI({
   model: "gpt-4o-mini",
   temperature: 0.3,
   apiKey: process.env.OPENAI_API_KEY
+}).bind({
+  tools: tools
 });
 
-const SYSTEM_PROMPT = `You are ExaMark's intelligent email automation agent. 
+const SYSTEM_PROMPT = `You are ExaMark's intelligent email automation agent.
 
-Analyze incoming emails and provide professional, helpful responses that move conversations forward.
+IMPORTANT: You have access to these tools - USE THEM when appropriate:
+- get_conversation: Get chat history for context
+- get_user_settings: Get user settings and calendar info  
+- create_calendar_event: Create Google Calendar events
+- send_email: Send email replies via Mailgun
+- store_event: Store events in database
 
-Key behaviors:
-- Respond professionally and concisely
-- If someone proposes a meeting time, acknowledge it positively
-- Keep replies focused and actionable
-- Maintain a helpful, business-appropriate tone
+When someone proposes a specific meeting time:
+1. CALL create_calendar_event with the proposed time
+2. CALL send_email to reply professionally
+3. CALL store_event to record the interaction
 
-Just return the email response text - no special formatting or function calls needed.`;
+Example: "tomorrow at 3pm PST" = create calendar for 3pm tomorrow
+
+Be action-oriented - use your tools to actually accomplish tasks.`;
 
 // === MAIN HANDLER ===
 
