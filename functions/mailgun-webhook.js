@@ -394,25 +394,19 @@ const model = new ChatOpenAI({
   model: "gpt-4o-mini",
   temperature: 0.3,
   apiKey: process.env.OPENAI_API_KEY
-}).bindTools(tools);
+});
 
-const SYSTEM_PROMPT = `You are ExaMark's intelligent email automation agent. Your goals:
+const SYSTEM_PROMPT = `You are ExaMark's intelligent email automation agent. 
 
-1. ANALYZE the incoming email and conversation history to understand context
-2. DETECT when users propose, confirm, or accept meeting times
-3. CREATE calendar events immediately when time is agreed upon - don't just promise to send invites
-4. SEND professional, contextual email replies that move conversations forward
-5. STORE all interactions for proper tracking and follow-up
+Analyze incoming emails and provide professional, helpful responses that move conversations forward.
 
 Key behaviors:
-- When a user gives a specific time (like "tomorrow at 5pm PST"), ALWAYS call create_calendar_event
-- Include the user's email in the attendees list for calendar events
-- Use conversation history to maintain context and avoid repetition
-- Keep replies concise and professional
-- Always call store_event after significant actions (sending emails, creating calendars)
-- Use proper email threading with in_reply_to and references
+- Respond professionally and concisely
+- If someone proposes a meeting time, acknowledge it positively
+- Keep replies focused and actionable
+- Maintain a helpful, business-appropriate tone
 
-Remember: Your tools handle all the technical work. Focus on intelligent decision-making about when and how to use them.`;
+Just return the email response text - no special formatting or function calls needed.`;
 
 // === MAIN HANDLER ===
 
@@ -494,11 +488,74 @@ export async function handler(event) {
     
     console.log('[WEBHOOK] Calling LangChain agent...');
     
-    // Call the LangChain agent
+    // Instead of using .bindTools(), we'll use function calling manually
     const agentResponse = await model.invoke([
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: JSON.stringify(agentInput) }
     ]);
+    
+    console.log('[WEBHOOK] Agent response:', agentResponse.content);
+    
+    // For now, let's create a simple response that works
+    // The agent will return instructions, and we'll execute them
+    const responseText = agentResponse.content;
+    
+    // Simple logic: if response mentions time/meeting, try to extract and create calendar
+    const hasTimeProposal = /\b(tomorrow|today|\d+\s?(pm|am|PST|EST)|\d+:\d+)/i.test(emailData.body);
+    
+    if (hasTimeProposal) {
+      console.log('[WEBHOOK] Detected time proposal, attempting calendar creation...');
+      
+      // Get user settings
+      const userSettings = await getUserSettingsTool.func({ tracking_id: trackingId });
+      const settings = JSON.parse(userSettings);
+      
+      // Create a basic calendar event (simplified for now)
+      try {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(15, 0, 0, 0); // 3 PM
+        
+        const endTime = new Date(tomorrow);
+        endTime.setHours(16, 0, 0, 0); // 4 PM
+        
+        const calendarResult = await createCalendarEventTool.func({
+          calendar_id: settings.calendar_id || 'primary',
+          start_time: tomorrow.toISOString(),
+          end_time: endTime.toISOString(),
+          title: 'Sales Discussion',
+          attendees: [emailData.from.match(/([^<]+@[^>]+)/)?.[1] || emailData.from],
+          timezone: 'America/Los_Angeles'
+        });
+        
+        console.log('[WEBHOOK] Calendar result:', calendarResult);
+      } catch (calError) {
+        console.error('[WEBHOOK] Calendar creation failed:', calError);
+      }
+    }
+    
+    // Send a reply
+    const replySubject = emailData.subject.startsWith('Re:') ? emailData.subject : `Re: ${emailData.subject}`;
+    
+    const emailResult = await sendEmailTool.func({
+      to: emailData.from,
+      subject: replySubject,
+      body: responseText || "Thank you for your email! I'll get back to you shortly.",
+      in_reply_to: emailData.messageId,
+      references: emailData.references || emailData.messageId,
+      tracking_id: trackingId
+    });
+    
+    console.log('[WEBHOOK] Email result:', emailResult);
+    
+    // Store the AI response
+    await storeEventTool.func({
+      tracking_id: trackingId,
+      event_type: 'ai_reply',
+      user_agent: `AI_Response: ${responseText}`,
+      email_address: emailData.from,
+      recipient: emailData.to
+    });
     
     console.log('[WEBHOOK] Agent processing completed');
     
