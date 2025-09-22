@@ -488,17 +488,17 @@ export async function handler(event) {
     
     console.log('[WEBHOOK] Calling LangChain agent...');
     
-    // Instead of using .bindTools(), we'll use function calling manually
-    const agentResponse = await model.invoke([
+    // Use the legacy LangChain approach for compatibility
+    const agentResponse = await model.call([
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: JSON.stringify(agentInput) }
     ]);
     
-    console.log('[WEBHOOK] Agent response:', agentResponse.content);
+    console.log('[WEBHOOK] Agent response:', agentResponse);
     
     // For now, let's create a simple response that works
     // The agent will return instructions, and we'll execute them
-    const responseText = agentResponse.content;
+    const responseText = typeof agentResponse === 'string' ? agentResponse : agentResponse.content || agentResponse.text || "Thank you for your email!";
     
     // Simple logic: if response mentions time/meeting, try to extract and create calendar
     const hasTimeProposal = /\b(tomorrow|today|\d+\s?(pm|am|PST|EST)|\d+:\d+)/i.test(emailData.body);
