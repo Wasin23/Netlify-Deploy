@@ -439,7 +439,7 @@ async function createEmbedding(text) {
 // Helper function to get 8-character user code from full user ID
 function getUserCode(fullUserId) {
   if (!fullUserId || fullUserId === 'default') {
-    return 'default8'; // Fallback for default user
+    return '76e84c79'; // Fallback for default user
   }
   
   // Extract first 8 characters from user ID
@@ -466,7 +466,7 @@ async function getFullUserIdFromUsername(username = 'colton.fidelman') {
 
 function extractUserIdFromTrackingId(trackingId) {
   try {
-    if (!trackingId) return 'default8'; // Return 8-char code for default
+    if (!trackingId) return '76e84c79'; // Return 8-char code for default user
     
     // Format: tracking-userCode_timestamp_hash where userCode is first 8 chars of user ID
     if (trackingId.startsWith('tracking-')) {
@@ -487,16 +487,16 @@ function extractUserIdFromTrackingId(trackingId) {
       return userCode;
     }
     
-    console.log('[USER CODE] Could not parse tracking ID, using default8:', trackingId);
-    return 'default8'; // Return 8-char code for default
+    console.log('[USER CODE] Could not parse tracking ID, using 76e84c79:', trackingId);
+    return '76e84c79'; // Return 8-char code for default
   } catch (error) {
     console.error('[USER CODE] Error extracting user code:', error);
-    return 'default8'; // Return 8-char code for default
+    return '76e84c79'; // Return 8-char code for default
   }
 }
 
 // Fetch timezone from lead agent settings
-async function getTimezoneFromSettings(userCode = 'default8') {
+async function getTimezoneFromSettings(userCode = '76e84c79') {
   try {
     console.log('[SETTINGS] Fetching timezone from lead agent settings for user code:', userCode);
     
@@ -529,7 +529,7 @@ async function getTimezoneFromSettings(userCode = 'default8') {
 }
 
 // Get user's Google Calendar ID from Zilliz settings
-async function getCalendarIdFromSettings(userCode = 'default8') {
+async function getCalendarIdFromSettings(userCode = '76e84c79') {
   try {
     console.log('[SETTINGS] Fetching calendar ID from lead agent settings for user code:', userCode);
     
@@ -1196,7 +1196,7 @@ function generateReplySubject(originalSubject, trackingId) {
 }
 
 // Load agent settings from Zilliz
-async function loadAgentSettings(userCode = 'default8') {
+async function loadAgentSettings(userCode = '76e84c79') {
   try {
     if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
       console.log('⚠️ [SETTINGS] No Zilliz credentials, using defaults');
@@ -1330,7 +1330,7 @@ function extractLeadCompany(emailData) {
 
 // Function to generate AI response suggestions
 // Enhanced AI Response Generation with Smart Intent Classification
-async function generateAIResponse(emailData, userId = 'default') {
+async function generateAIResponse(emailData, userId = '76e84c79-9b13-4c55-be86-d0bd9baa9411') {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return generateRuleBasedResponse(emailData);
@@ -2343,7 +2343,7 @@ async function storeLeadMessage(emailData, trackingId) {
 }
 
 // Smart Calendar Event Creation - Automatically creates calendar events when appropriate
-async function handleCalendarEventCreation(emailData, aiResponse, trackingId, userId = 'default') {
+async function handleCalendarEventCreation(emailData, aiResponse, trackingId, userId = '76e84c79-9b13-4c55-be86-d0bd9baa9411') {
   try {
     console.log('📅 [CALENDAR] Analyzing email for automatic calendar event creation...');
     
