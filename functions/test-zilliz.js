@@ -6,7 +6,7 @@ const milvusClient = new MilvusClient({
   token: process.env.ZILLIZ_TOKEN?.trim(),
 });
 
-export default async function handler(event, context) {
+export const handler = async (event, context) => {
   try {
     console.log('[TEST] Testing get_user_settings tool...');
     
