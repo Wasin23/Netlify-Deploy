@@ -488,17 +488,20 @@ export async function handler(event) {
     
     console.log('[WEBHOOK] Calling LangChain agent...');
     
-    // Use the legacy LangChain approach for compatibility
-    const agentResponse = await model.call([
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: JSON.stringify(agentInput) }
-    ]);
+    // Use a simple string prompt for compatibility
+    const prompt = `${SYSTEM_PROMPT}
+
+Incoming Email Data:
+${JSON.stringify(agentInput)}
+
+Please analyze this email and provide a professional response. If the user is proposing a meeting time, indicate that a calendar invite will be sent.`;
+
+    const agentResponse = await model.invoke(prompt);
     
     console.log('[WEBHOOK] Agent response:', agentResponse);
     
-    // For now, let's create a simple response that works
-    // The agent will return instructions, and we'll execute them
-    const responseText = typeof agentResponse === 'string' ? agentResponse : agentResponse.content || agentResponse.text || "Thank you for your email!";
+    // Extract the response text
+    const responseText = agentResponse.content || agentResponse.text || agentResponse || "Thank you for your email!";
     
     // Simple logic: if response mentions time/meeting, try to extract and create calendar
     const hasTimeProposal = /\b(tomorrow|today|\d+\s?(pm|am|PST|EST)|\d+:\d+)/i.test(emailData.body);
