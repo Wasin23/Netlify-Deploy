@@ -541,22 +541,25 @@ async function getCalendarIdFromSettings(userCode = 'default8') {
           token: process.env.ZILLIZ_TOKEN
         });
 
-        // Query for calendar_id setting specifically using user_code
-        const searchResult = await client.search({
+        // Query for calendar_id setting using the working query method
+        const queryResult = await client.query({
           collection_name: 'agent_settings',
-          vector: [0.1, 0.2], // Dummy vector since we're using filter
-          limit: 10,
-          filter: `user_code == "${userCode}" && setting_key == "calendar_id"`
+          filter: 'id >= 0',
+          output_fields: ['setting_key', 'setting_value'],
+          limit: 100
         });
 
-        console.log('[SETTINGS] Zilliz search result:', searchResult);
+        console.log('[SETTINGS] Zilliz query result:', queryResult);
         
-        if (searchResult.results && searchResult.results.length > 0) {
-          for (const result of searchResult.results) {
-            if (result.user_code === userCode && result.setting_key === 'calendar_id') {
-              console.log('[SETTINGS] Found calendar ID in Zilliz:', result.setting_value);
-              return result.setting_value;
-            }
+        if (queryResult.data && queryResult.data.length > 0) {
+          // Look for calendar_id with user signature
+          const calendarSetting = queryResult.data.find(setting => 
+            setting.setting_key === `calendar_id_user_${userCode}`
+          );
+          
+          if (calendarSetting) {
+            console.log('[SETTINGS] Found calendar ID in Zilliz:', calendarSetting.setting_value);
+            return calendarSetting.setting_value;
           }
         }
         
