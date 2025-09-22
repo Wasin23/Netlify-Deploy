@@ -49,6 +49,19 @@ const milvusClient = new MilvusClient({
   password: process.env.ZILLIZ_TOKEN,
 });
 
+// Test Zilliz connection
+async function testZillizConnection() {
+  try {
+    console.log('[ZILLIZ] Testing connection...');
+    const collections = await milvusClient.listCollections();
+    console.log('[ZILLIZ] Connection successful, collections:', collections.data);
+    return true;
+  } catch (error) {
+    console.error('[ZILLIZ] Connection failed:', error.message);
+    return false;
+  }
+}
+
 // === DEDUPLICATION SYSTEM ===
 
 const processedMessages = new Map(); // In-memory store for this function instance
@@ -84,6 +97,13 @@ const getConversationTool = new DynamicStructuredTool({
   func: async ({ tracking_id, limit }) => {
     try {
       console.log(`[TOOL] Getting conversation for tracking_id: ${tracking_id}`);
+      
+      // Test connection first
+      const connectionOk = await testZillizConnection();
+      if (!connectionOk) {
+        console.log('[TOOL] Zilliz connection failed, returning empty conversation');
+        return JSON.stringify([]);
+      }
       
       await milvusClient.loadCollection({ collection_name: 'email_tracking_events' });
       
@@ -124,6 +144,18 @@ const getUserSettingsTool = new DynamicStructuredTool({
       }
       
       console.log(`[TOOL] Getting settings for user: ${userId}`);
+      
+      // Test connection first
+      const connectionOk = await testZillizConnection();
+      if (!connectionOk) {
+        console.log('[TOOL] Zilliz connection failed, using default settings');
+        return JSON.stringify({
+          calendar_id: 'primary',
+          signature: 'ExaMark AI Assistant',
+          company_name: 'Our Company',
+          user_name: '[Your Name]'
+        });
+      }
       
       await milvusClient.loadCollection({ collection_name: 'agent_settings' });
       
@@ -354,6 +386,17 @@ const storeEventTool = new DynamicStructuredTool({
         dummy_vector: [0, 0],
         ...additional_data
       };
+      
+      // Test connection first
+      const connectionOk = await testZillizConnection();
+      if (!connectionOk) {
+        console.log('[TOOL] Zilliz connection failed, skipping storage');
+        return JSON.stringify({
+          success: false,
+          error: 'Database connection failed',
+          skipped: true
+        });
+      }
       
       await milvusClient.loadCollection({ collection_name: 'email_tracking_events' });
       
