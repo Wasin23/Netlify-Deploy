@@ -1205,37 +1205,43 @@ async function loadAgentSettings(userCode = 'default8') {
       token: process.env.ZILLIZ_TOKEN
     });
 
-    // Query all settings for the user code
-    const searchResult = await client.search({
+    // Query settings using the signature system - use query method instead of search
+    const queryResult = await client.query({
       collection_name: 'agent_settings',
-      vector: [0.1, 0.2], // Dummy vector since we're using filter
-      limit: 100,
-      filter: `user_code == "${userCode}"`
+      filter: 'id >= 0',
+      output_fields: ['setting_key', 'setting_value', 'setting_type', 'user_id'],
+      limit: 100
     });
 
     const settings = {};
-    if (searchResult.results && searchResult.results.length > 0) {
-      for (const result of searchResult.results) {
-        if (result.user_code === userCode) {
-          // Parse setting_value based on setting_type
-          let value;
-          try {
-            if (result.setting_type === 'array' || result.setting_type === 'object') {
-              value = JSON.parse(result.setting_value);
-            } else if (result.setting_type === 'boolean') {
-              value = result.setting_value === 'true';
-            } else if (result.setting_type === 'number') {
-              value = parseFloat(result.setting_value);
-            } else {
-              value = result.setting_value;
-            }
-          } catch (parseError) {
-            console.error('❌ [SETTINGS] Parse error for', result.setting_key, parseError);
-            value = result.setting_value; // Fallback to string
+    if (queryResult.data && queryResult.data.length > 0) {
+      // Filter for settings with the user signature
+      const userSettings = queryResult.data.filter(setting => 
+        setting.setting_key.includes(`_user_${userCode}`)
+      );
+      
+      for (const result of userSettings) {
+        // Extract the original setting key by removing the user signature
+        const originalKey = result.setting_key.replace(`_user_${userCode}`, '');
+        
+        // Parse setting_value based on setting_type
+        let value;
+        try {
+          if (result.setting_type === 'array' || result.setting_type === 'object') {
+            value = JSON.parse(result.setting_value);
+          } else if (result.setting_type === 'boolean') {
+            value = result.setting_value === 'true';
+          } else if (result.setting_type === 'number') {
+            value = parseFloat(result.setting_value);
+          } else {
+            value = result.setting_value;
           }
-          
-          settings[result.setting_key] = value;
+        } catch (parseError) {
+          console.error('❌ [SETTINGS] Parse error for', originalKey, parseError);
+          value = result.setting_value; // Fallback to string
         }
+        
+        settings[originalKey] = value;
       }
     }
 
@@ -1745,19 +1751,23 @@ async function getResponseSettings(userId = 'default') {
     // Load collection
     await client.loadCollection({ collection_name: collectionName });
 
-    // Search for all settings for this user
+    // Get user code from user ID (first 8 characters)
+    const userCode = getUserCode(userId);
+    
+    // Search for all settings for this user code
     const searchResult = await client.search({
       collection_name: collectionName,
       vectors: [[0.1, 0.2]],
       search_params: { nprobe: 10 },
       limit: 100,
-      output_fields: ['setting_key', 'setting_value', 'setting_type', 'user_id']
+      output_fields: ['setting_key', 'setting_value', 'setting_type', 'user_id', 'user_code'],
+      filter: `user_code == "${userCode}"`
     });
 
     const settings = {};
     if (searchResult.results && searchResult.results.length > 0) {
       for (const result of searchResult.results) {
-        if (result.user_id === userId) {
+        if (result.user_code === userCode) {
           try {
             settings[result.setting_key] = JSON.parse(result.setting_value);
           } catch (e) {

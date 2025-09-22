@@ -39,59 +39,58 @@ async function testSettingsLookup() {
     // Search for settings with user_code filter
     console.log(`🔍 Searching for settings with user_code: "${userCode}"`);
     
-    const searchResult = await client.search({
+    // Search for settings with user_code filter using query method
+    console.log(`🔍 Searching for settings with user_code: "${userCode}"`);
+    
+    const queryResult = await client.query({
       collection_name: collectionName,
-      vectors: [[0.1, 0.2]],
-      search_params: { nprobe: 10 },
-      limit: 100,
-      output_fields: ['setting_key', 'setting_value', 'setting_type', 'user_id', 'user_code'],
-      filter: `user_code == "${userCode}"`
+      filter: 'id >= 0',
+      output_fields: ['setting_key', 'setting_value', 'setting_type', 'user_id'],
+      limit: 100
     });
 
-    console.log('📊 Search Results:');
-    console.log(`- Results found: ${searchResult.results ? searchResult.results.length : 0}`);
+    console.log('📊 Query Results:');
+    console.log(`- Results found: ${queryResult.data ? queryResult.data.length : 0}`);
     
-    if (searchResult.results && searchResult.results.length > 0) {
-      console.log('✅ Settings found:');
-      for (const result of searchResult.results) {
-        console.log(`  - ${result.setting_key}: ${result.setting_value} (user_code: ${result.user_code})`);
+    if (queryResult.data && queryResult.data.length > 0) {
+      // Filter for user-specific settings
+      const userSettings = queryResult.data.filter(setting => 
+        setting.setting_key.includes(`_user_${userCode}`)
+      );
+      
+      console.log(`✅ Settings with your signature: ${userSettings.length}`);
+      for (const result of userSettings) {
+        const originalKey = result.setting_key.replace(`_user_${userCode}`, '');
+        console.log(`  - ${originalKey}: ${result.setting_value?.substring(0, 50)}...`);
       }
       
       // Check specifically for calendar_id
-      const calendarSetting = searchResult.results.find(r => r.setting_key === 'calendar_id');
+      const calendarSetting = userSettings.find(r => r.setting_key.includes('calendar_id'));
       if (calendarSetting) {
         console.log(`🗓️ Calendar ID found: ${calendarSetting.setting_value}`);
       } else {
         console.log('❌ No calendar_id setting found');
       }
+      
+      return {
+        success: true,
+        userCode: userCode,
+        resultsFound: userSettings.length,
+        settings: userSettings.map(s => ({
+          key: s.setting_key.replace(`_user_${userCode}`, ''),
+          value: s.setting_value
+        }))
+      };
     } else {
-      console.log('❌ No settings found for this user_code');
-      
-      // Try searching without filter to see all data
-      console.log('\n🔍 Searching all settings (no filter):');
-      const allResults = await client.search({
-        collection_name: collectionName,
-        vectors: [[0.1, 0.2]],
-        search_params: { nprobe: 10 },
-        limit: 20,
-        output_fields: ['setting_key', 'setting_value', 'user_id', 'user_code']
-      });
-      
-      console.log(`- Total settings in DB: ${allResults.results ? allResults.results.length : 0}`);
-      if (allResults.results && allResults.results.length > 0) {
-        console.log('📋 Available settings:');
-        for (const result of allResults.results) {
-          console.log(`  - Key: ${result.setting_key}, User: ${result.user_id || 'N/A'}, Code: ${result.user_code || 'N/A'}`);
-        }
-      }
+      console.log('❌ No settings found in database');
+      return {
+        success: true,
+        userCode: userCode,
+        resultsFound: 0,
+        settings: [],
+        message: 'No settings found in database'
+      };
     }
-
-    return {
-      success: true,
-      userCode: userCode,
-      resultsFound: searchResult.results ? searchResult.results.length : 0,
-      settings: searchResult.results || []
-    };
 
   } catch (error) {
     console.error('❌ Settings lookup test failed:', error);
