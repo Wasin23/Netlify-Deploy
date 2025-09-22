@@ -249,9 +249,9 @@ const createCalendarEventTool = new DynamicStructuredTool({
       const payload = Buffer.from(JSON.stringify(jwtPayload)).toString('base64url');
       const signData = `${header}.${payload}`;
       
-      const signature = crypto.sign('sha256', Buffer.from(signData))
-        .update(privateKey)
-        .sign('base64url');
+      const sign = crypto.createSign('RSA-SHA256');
+      sign.update(signData);
+      const signature = sign.sign(privateKey, 'base64url');
       
       const jwt = `${signData}.${signature}`;
       
@@ -468,20 +468,24 @@ const model = new ChatOpenAI({
 const SYSTEM_PROMPT = `You are an AI-powered sales assistant with access to tools. Your job is to:
 
 1. ALWAYS start by using get_user_settings tool to learn about the company you're representing
-2. Respond professionally to prospect emails using the company information
-3. When someone proposes a meeting time, use create_calendar_event tool to schedule it
-4. Use send_email tool to reply to prospects
-5. Use store_event tool to log interactions
+2. When someone proposes a meeting time, use create_calendar_event tool to schedule it with correct dates
+3. Use send_email tool to reply to prospects
+4. Use store_event tool to log interactions
+
+CURRENT DATE/TIME INFO:
+- Today is: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+- Current date: ${new Date().toISOString().split('T')[0]}
+- Tomorrow's date: ${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}
 
 IMPORTANT RULES:
 - ALWAYS use tools when appropriate - this is critical for system functionality
-- When you see meeting time proposals like "tomorrow at 3pm EST", create the calendar event immediately
+- When you see meeting time proposals like "tomorrow at 3pm EST", create calendar event using tomorrow's date above
 - Write natural business emails, never include technical data or JSON in email content
 - Use company information from settings to personalize your responses
 
 Tools available:
 - get_user_settings: Get company info and settings
-- create_calendar_event: Schedule meetings when times are proposed
+- create_calendar_event: Schedule meetings when times are proposed (use correct dates!)
 - send_email: Send professional replies
 - store_event: Log interactions
 - get_conversation: View conversation history
@@ -601,7 +605,7 @@ export async function handler(event) {
       agent: agent,
       tools: tools,
       verbose: true,
-      maxIterations: 5
+      maxIterations: 10
     });
     
     // Execute the agent with proper input
