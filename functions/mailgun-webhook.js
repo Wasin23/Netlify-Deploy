@@ -238,15 +238,25 @@ const createCalendarEventTool = new DynamicStructuredTool({
       
       // Clean and format the private key properly
       if (privateKey) {
-        privateKey = privateKey.replace(/\\n/g, '\n');
+        // Handle multiple levels of escaping
+        privateKey = privateKey.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n');
+        
+        // Remove any extra quotes that might have been added
+        privateKey = privateKey.replace(/^["']|["']$/g, '');
+        
         // Ensure proper PEM format
         if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
           privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
         }
+        
+        // Clean up any double newlines
+        privateKey = privateKey.replace(/\n\n+/g, '\n');
       }
       
       console.log('[TOOL] Service account email:', serviceAccountEmail);
       console.log('[TOOL] Private key length:', privateKey ? privateKey.length : 'undefined');
+      console.log('[TOOL] Private key starts with:', privateKey ? privateKey.substring(0, 50) : 'undefined');
+      console.log('[TOOL] Private key ends with:', privateKey ? privateKey.substring(privateKey.length - 50) : 'undefined');
       
       const now = Math.floor(Date.now() / 1000);
       const jwtPayload = {
