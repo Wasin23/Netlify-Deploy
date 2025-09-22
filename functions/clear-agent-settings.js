@@ -39,27 +39,19 @@ export const handler = async (event, context) => {
     const statsBefore = await milvusClient.getCollectionStatistics({ collection_name: 'agent_settings' });
     console.log('[CLEAR] Stats before clearing:', statsBefore);
     
-    // Delete all entities from the collection
-    const deleteResult = await milvusClient.delete({
-      collection_name: 'agent_settings',
-      expr: 'id >= 0' // This should match all records assuming id field exists
-    });
-    
-    console.log('[CLEAR] Delete result:', deleteResult);
-    
-    // Get collection stats after clearing
-    const statsAfter = await milvusClient.getCollectionStatistics({ collection_name: 'agent_settings' });
-    console.log('[CLEAR] Stats after clearing:', statsAfter);
+    // Try to drop and recreate the collection instead of deleting all entities
+    console.log('[CLEAR] Dropping collection...');
+    const dropResult = await milvusClient.dropCollection({ collection_name: 'agent_settings' });
+    console.log('[CLEAR] Collection dropped:', dropResult);
     
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         success: true,
-        message: 'agent_settings collection cleared successfully',
+        message: 'agent_settings collection dropped successfully',
         statsBefore: statsBefore,
-        statsAfter: statsAfter,
-        deleteResult: deleteResult
+        dropResult: dropResult
       }, null, 2)
     };
     
