@@ -136,10 +136,10 @@ const getConversationTool = new DynamicStructuredTool({
   }
 });
 
-// Tool 2: Get user settings
+// Tool 2: Get user settings (comprehensive)
 const getUserSettingsTool = new DynamicStructuredTool({
   name: "get_user_settings",
-  description: "Get user-specific settings like calendar ID and signature from tracking_id",
+  description: "Get comprehensive user settings including calendar, company info, response style, and knowledge base",
   schema: z.object({
     tracking_id: z.string().describe("The tracking ID to extract user code from")
   }),
@@ -150,7 +150,7 @@ const getUserSettingsTool = new DynamicStructuredTool({
         return JSON.stringify({ error: "Could not extract user ID from tracking_id" });
       }
       
-      console.log(`[TOOL] Getting settings for user: ${userId}`);
+      console.log(`[TOOL] Getting comprehensive settings for user: ${userId}`);
       
       // Test connection first
       const connectionOk = await testZillizConnection();
@@ -158,30 +158,48 @@ const getUserSettingsTool = new DynamicStructuredTool({
         console.log('[TOOL] Zilliz connection failed, using default settings');
         return JSON.stringify({
           calendar_id: 'primary',
-          signature: 'ExaMark AI Assistant',
-          company_name: 'Our Company',
-          user_name: '[Your Name]'
+          company_name: 'Exabits',
+          timezone: 'America/Los_Angeles',
+          response_tone: 'professional_friendly'
         });
       }
       
       await milvusClient.loadCollection({ collection_name: 'agent_settings' });
       
-      const result = await milvusClient.query({
+      // Get all settings for this user
+      const allSettings = await milvusClient.query({
         collection_name: 'agent_settings',
-        expr: `user_id == "${userId}"`,
-        output_fields: ["calendar_id", "signature", "company_name", "user_name"],
-        limit: 1,
+        expr: `field_name like "%%_user_${userId}"`,
+        output_fields: ["field_name", "field_value", "field_type"],
+        limit: 50,
         consistency_level: "Strong"
       });
       
-      const settings = result.data?.[0] || {
+      // Parse settings into a usable object
+      const settings = {
         calendar_id: 'primary',
-        signature: 'ExaMark AI Assistant',
-        company_name: 'Our Company',
-        user_name: '[Your Name]'
+        company_name: 'Exabits', 
+        timezone: 'America/Los_Angeles',
+        response_tone: 'professional_friendly'
       };
       
-      console.log(`[TOOL] Retrieved settings for user ${userId}`);
+      for (const item of allSettings.data || []) {
+        const fieldName = item.field_name.replace(`_user_${userId}`, '');
+        let value = item.field_value;
+        
+        // Parse JSON values
+        if (item.field_type === 'json' || (typeof value === 'string' && value.startsWith('{'))) {
+          try {
+            value = JSON.parse(value);
+          } catch (e) {
+            // Keep as string if JSON parse fails
+          }
+        }
+        
+        settings[fieldName] = value;
+      }
+      
+      console.log(`[TOOL] Retrieved ${Object.keys(settings).length} settings for user ${userId}`);
       return JSON.stringify(settings);
       
     } catch (error) {
@@ -255,13 +273,12 @@ const createCalendarEventTool = new DynamicStructuredTool({
       const accessToken = tokenData.access_token;
       console.log('[TOOL] Got access token successfully');
       
-      // Create calendar event
+      // Create calendar event (no attendees - service account lacks permission)
       const event = {
         summary: title,
         start: { dateTime: start_time, timeZone: timezone },
         end: { dateTime: end_time, timeZone: timezone },
-        attendees: attendees.map(email => ({ email })),
-        description: 'Meeting scheduled through ExaMark AI Assistant'
+        description: `Meeting scheduled through ExaMark AI Assistant\n\nContact: ${attendees.join(', ')}`
       };
       
       const calendarResponse = await fetch(
@@ -444,27 +461,30 @@ const model = new ChatOpenAI({
   model: "gpt-4o-mini",
   temperature: 0.3,
   apiKey: process.env.OPENAI_API_KEY
-}).bind({
-  tools: tools
 });
 
 const SYSTEM_PROMPT = `You are ExaMark's intelligent email automation agent.
 
-IMPORTANT: You have access to these tools - USE THEM when appropriate:
-- get_conversation: Get chat history for context
-- get_user_settings: Get user settings and calendar info  
-- create_calendar_event: Create Google Calendar events
-- send_email: Send email replies via Mailgun
-- store_event: Store events in database
+When someone proposes a meeting time, respond with EXACTLY this format:
+CALENDAR_EVENT_NEEDED: {
+  "start_time": "ISO datetime for start",
+  "end_time": "ISO datetime for end", 
+  "title": "Meeting title",
+  "attendees": ["email@example.com"]
+}
 
-When someone proposes a specific meeting time:
-1. CALL create_calendar_event with the proposed time
-2. CALL send_email to reply professionally
-3. CALL store_event to record the interaction
+Then provide your normal professional email response.
 
-Example: "tomorrow at 3pm PST" = create calendar for 3pm tomorrow
+Example:
+If they say "tomorrow at 3pm PST", respond:
+CALENDAR_EVENT_NEEDED: {
+  "start_time": "2025-09-23T15:00:00-07:00",
+  "end_time": "2025-09-23T16:00:00-07:00",
+  "title": "Sales Discussion",
+  "attendees": ["their-email@domain.com"]
+}
 
-Be action-oriented - use your tools to actually accomplish tasks.`;
+Hi there! I've scheduled our meeting for tomorrow at 3pm PST. You'll receive a calendar invite shortly.`;
 
 // === MAIN HANDLER ===
 
@@ -565,9 +585,14 @@ Please analyze this email and provide a professional response. If the user is pr
     if (hasTimeProposal) {
       console.log('[WEBHOOK] Detected time proposal, attempting calendar creation...');
       
-      // Get user settings
+      // Get user settings first to find correct calendar
+      console.log('[WEBHOOK] Getting user settings for tracking ID:', trackingId);
       const userSettings = await getUserSettingsTool.func({ tracking_id: trackingId });
+      console.log('[WEBHOOK] User settings result:', userSettings);
+      
       const settings = JSON.parse(userSettings);
+      console.log('[WEBHOOK] Parsed settings:', settings);
+      console.log('[WEBHOOK] Using calendar_id:', settings.calendar_id);
       
       // Create a basic calendar event (simplified for now)
       try {
@@ -582,11 +607,12 @@ Please analyze this email and provide a professional response. If the user is pr
           calendar_id: settings.calendar_id || 'primary',
           start_time: tomorrow.toISOString(),
           end_time: endTime.toISOString(),
-          title: 'Sales Discussion',
-          attendees: [emailData.from.match(/([^<]+@[^>]+)/)?.[1] || emailData.from],
+          title: `Sales Discussion with ${emailData.from}`,
+          attendees: [], // No attendees - service account doesn't have permission
           timezone: 'America/Los_Angeles'
         });
         
+        console.log('[WEBHOOK] Calendar creation attempted with calendar_id:', settings.calendar_id);
         console.log('[WEBHOOK] Calendar result:', calendarResult);
       } catch (calError) {
         console.error('[WEBHOOK] Calendar creation failed:', calError);
