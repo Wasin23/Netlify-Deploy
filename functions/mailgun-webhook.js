@@ -189,6 +189,8 @@ const getUserSettingsTool = new DynamicStructuredTool({
         const fieldName = item.field_name.replace(`_user_${userId}`, '');
         let value = item.field_value;
         
+        console.log(`[DEBUG] Zilliz field: ${item.field_name} -> ${fieldName} = ${value}`);
+        
         // Parse JSON values
         if (item.field_type === 'json' || (typeof value === 'string' && value.startsWith('{'))) {
           try {
