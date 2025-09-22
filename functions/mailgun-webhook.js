@@ -234,7 +234,19 @@ const createCalendarEventTool = new DynamicStructuredTool({
       
       // Create JWT for Google OAuth
       const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-      const privateKey = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+      
+      // Clean and format the private key properly
+      if (privateKey) {
+        privateKey = privateKey.replace(/\\n/g, '\n');
+        // Ensure proper PEM format
+        if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+          privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+        }
+      }
+      
+      console.log('[TOOL] Service account email:', serviceAccountEmail);
+      console.log('[TOOL] Private key length:', privateKey ? privateKey.length : 'undefined');
       
       const now = Math.floor(Date.now() / 1000);
       const jwtPayload = {
@@ -249,9 +261,20 @@ const createCalendarEventTool = new DynamicStructuredTool({
       const payload = Buffer.from(JSON.stringify(jwtPayload)).toString('base64url');
       const signData = `${header}.${payload}`;
       
-      const sign = crypto.createSign('RSA-SHA256');
-      sign.update(signData);
-      const signature = sign.sign(privateKey, 'base64url');
+      // Create signature with better error handling
+      let signature;
+      try {
+        const sign = crypto.createSign('RSA-SHA256');
+        sign.update(signData);
+        signature = sign.sign(privateKey, 'base64url');
+      } catch (signError) {
+        console.error('[TOOL] Crypto signing error:', signError.message);
+        return JSON.stringify({ 
+          success: false, 
+          error: `Signing failed: ${signError.message}`,
+          details: 'Check private key format'
+        });
+      }
       
       const jwt = `${signData}.${signature}`;
       
