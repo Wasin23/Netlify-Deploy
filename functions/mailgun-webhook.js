@@ -463,28 +463,16 @@ const model = new ChatOpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const SYSTEM_PROMPT = `You are ExaMark's intelligent email automation agent.
+const SYSTEM_PROMPT = `You are an AI-powered sales assistant. Your job is to:
 
-When someone proposes a meeting time, respond with EXACTLY this format:
-CALENDAR_EVENT_NEEDED: {
-  "start_time": "ISO datetime for start",
-  "end_time": "ISO datetime for end", 
-  "title": "Meeting title",
-  "attendees": ["email@example.com"]
-}
+1. Respond professionally to prospect emails
+2. Use company information from your settings when available
+3. When someone proposes a meeting time, acknowledge it and confirm you'll send a calendar invite
+4. Keep responses natural, helpful, and business-appropriate
 
-Then provide your normal professional email response.
+Important: Write normal business emails only. Never include technical data, JSON, or system information in your responses. The system handles calendar creation automatically.
 
-Example:
-If they say "tomorrow at 3pm PST", respond:
-CALENDAR_EVENT_NEEDED: {
-  "start_time": "2025-09-23T15:00:00-07:00",
-  "end_time": "2025-09-23T16:00:00-07:00",
-  "title": "Sales Discussion",
-  "attendees": ["their-email@domain.com"]
-}
-
-Hi there! I've scheduled our meeting for tomorrow at 3pm PST. You'll receive a calendar invite shortly.`;
+Use the get_user_settings tool to learn about the company you're representing, then respond accordingly.`;
 
 // === MAIN HANDLER ===
 
