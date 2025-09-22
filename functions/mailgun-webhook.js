@@ -138,7 +138,7 @@ const getConversationTool = new DynamicStructuredTool({
   }
 });
 
-// Tool 2: Get user settings (comprehensive)
+// Tool 2: Get user settings (comprehensive) - Fixed with ChatGPT's solution
 const getUserSettingsTool = new DynamicStructuredTool({
   name: "get_user_settings",
   description: "Get comprehensive user settings including calendar, company info, response style, and knowledge base",
@@ -168,42 +168,58 @@ const getUserSettingsTool = new DynamicStructuredTool({
       
       await milvusClient.loadCollection({ collection_name: 'agent_settings' });
       
-      // Get all settings for this user
-      const allSettings = await milvusClient.query({
-        collection_name: 'agent_settings',
-        expr: `field_name like "%%_user_${userId}"`,
-        output_fields: ["field_name", "field_value", "field_type"],
-        limit: 50,
-        consistency_level: "Strong"
-      });
+      // Helper function to escape strings for Zilliz queries (ChatGPT's fix)
+      function esc(s) { return String(s).replace(/(["\\])/g, '\\$1'); }
       
-      // Parse settings into a usable object
+      // Helper to get a specific setting by exact field name (ChatGPT's fix)
+      async function getSetting(key) {
+        const res = await milvusClient.query({
+          collection_name: 'agent_settings',
+          expr: `field_name == "${esc(key)}"`,
+          output_fields: ['field_name', 'field_value', 'field_type'],
+          limit: 1,
+          consistency_level: 'Strong'
+        });
+        const rows = res.data || res || [];
+        return rows.length ? rows[0].field_value : undefined;
+      }
+      
+      // Default settings
       const settings = {
         calendar_id: 'primary',
-        company_name: 'Exabits', 
+        company_name: 'Exabits',
         timezone: 'America/Los_Angeles',
         response_tone: 'professional_friendly'
       };
       
-      for (const item of allSettings.data || []) {
-        const fieldName = item.field_name.replace(`_user_${userId}`, '');
-        let value = item.field_value;
-        
-        console.log(`[DEBUG] Zilliz field: ${item.field_name} -> ${fieldName} = ${value}`);
-        
-        // Parse JSON values
-        if (item.field_type === 'json' || (typeof value === 'string' && value.startsWith('{'))) {
-          try {
-            value = JSON.parse(value);
-          } catch (e) {
-            // Keep as string if JSON parse fails
-          }
-        }
-        
-        settings[fieldName] = value;
+      // Fetch specific settings with exact equality (ChatGPT's fix)
+      const calendarId = await getSetting(`calendar_id_user_${userId}`);
+      if (calendarId) {
+        settings.calendar_id = String(calendarId).trim();
+        console.log(`[TOOL] Found calendar_id: ${settings.calendar_id}`);
       }
       
-      console.log(`[TOOL] Retrieved ${Object.keys(settings).length} settings for user ${userId}`);
+      const timezone = await getSetting(`timezone_user_${userId}`);
+      if (timezone) {
+        settings.timezone = String(timezone).trim();
+      }
+      
+      const companyInfo = await getSetting(`company_info_user_${userId}`);
+      if (companyInfo) {
+        try {
+          const obj = JSON.parse(companyInfo);
+          settings.company_name = obj.name || obj.company_name || settings.company_name;
+        } catch {
+          settings.company_name = String(companyInfo).trim();
+        }
+      }
+      
+      const responseTone = await getSetting(`response_tone_user_${userId}`);
+      if (responseTone) {
+        settings.response_tone = String(responseTone).trim();
+      }
+      
+      console.log(`[TOOL] Final settings:`, settings);
       return JSON.stringify(settings);
       
     } catch (error) {
