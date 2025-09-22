@@ -470,13 +470,11 @@ export async function handler(event) {
     
     console.log(`[WEBHOOK] Using tracking ID: ${trackingId}`);
     
-    // Store the incoming message first
-    await storeEventTool.func({
+    // Store the incoming message first (skip for testing)
+    console.log('[WEBHOOK] Would store message to Zilliz:', {
       tracking_id: trackingId,
       event_type: 'lead_message',
-      user_agent: `Lead_Message: ${emailData.body}`,
-      email_address: emailData.from,
-      recipient: emailData.to
+      from: emailData.from
     });
     
     // Prepare context for the agent
