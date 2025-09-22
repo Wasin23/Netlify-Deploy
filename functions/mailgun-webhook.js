@@ -168,59 +168,42 @@ const getUserSettingsTool = new DynamicStructuredTool({
       
       await milvusClient.loadCollection({ collection_name: 'agent_settings' });
       
-      // Helper function to escape strings for Zilliz queries (ChatGPT's fix)
-      function esc(s) { return String(s).replace(/(["\\])/g, '\\$1'); }
+      // Query for user settings (single JSON column)
+      const result = await milvusClient.query({
+        collection_name: 'agent_settings',
+        expr: `setting_key == "email_response_settings" && user_id == "${userId.replace(/["\\]/g, '\\$&')}"`,
+        output_fields: ['setting_value', 'updated_at'],
+        limit: 1,
+        consistency_level: 'Strong'
+      });
       
-      // Helper to get a specific setting by exact field name (ChatGPT's fix)
-      async function getSetting(key) {
-        const res = await milvusClient.query({
-          collection_name: 'agent_settings',
-          expr: `field_name == "${esc(key)}"`,
-          output_fields: ['field_name', 'field_value', 'field_type'],
-          limit: 1,
-          consistency_level: 'Strong'
+      const rows = result.data || result || [];
+      console.log(`[TOOL] Query result:`, rows);
+      
+      if (rows.length === 0) {
+        console.log(`[TOOL] No settings found for user ${userId}, using defaults`);
+        return JSON.stringify({
+          calendar_id: 'colton.fidd@gmail.com', // Your actual calendar ID as default
+          company_name: 'Exabits',
+          timezone: 'America/Los_Angeles',
+          response_tone: 'professional_friendly'
         });
-        const rows = res.data || res || [];
-        return rows.length ? rows[0].field_value : undefined;
       }
       
-      // Default settings
-      const settings = {
-        calendar_id: 'primary',
-        company_name: 'Exabits',
-        timezone: 'America/Los_Angeles',
-        response_tone: 'professional_friendly'
+      // Parse the JSON settings
+      const settings = JSON.parse(rows[0].setting_value);
+      console.log(`[TOOL] Found settings for user ${userId}:`, settings);
+      
+      // Ensure required fields exist
+      const finalSettings = {
+        calendar_id: settings.calendar_id || 'colton.fidd@gmail.com',
+        company_name: settings.company_name || 'Exabits',
+        timezone: settings.timezone || 'America/Los_Angeles',
+        response_tone: settings.response_tone || 'professional_friendly'
       };
       
-      // Fetch specific settings with exact equality (ChatGPT's fix)
-      const calendarId = await getSetting(`calendar_id_user_${userId}`);
-      if (calendarId) {
-        settings.calendar_id = String(calendarId).trim();
-        console.log(`[TOOL] Found calendar_id: ${settings.calendar_id}`);
-      }
-      
-      const timezone = await getSetting(`timezone_user_${userId}`);
-      if (timezone) {
-        settings.timezone = String(timezone).trim();
-      }
-      
-      const companyInfo = await getSetting(`company_info_user_${userId}`);
-      if (companyInfo) {
-        try {
-          const obj = JSON.parse(companyInfo);
-          settings.company_name = obj.name || obj.company_name || settings.company_name;
-        } catch {
-          settings.company_name = String(companyInfo).trim();
-        }
-      }
-      
-      const responseTone = await getSetting(`response_tone_user_${userId}`);
-      if (responseTone) {
-        settings.response_tone = String(responseTone).trim();
-      }
-      
-      console.log(`[TOOL] Final settings:`, settings);
-      return JSON.stringify(settings);
+      console.log(`[TOOL] Final settings:`, finalSettings);
+      return JSON.stringify(finalSettings);
       
     } catch (error) {
       console.error('[TOOL] Error getting user settings:', error);
