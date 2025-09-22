@@ -435,36 +435,75 @@ async function createEmbedding(text) {
   }
 }
 
-// Extract user ID from tracking ID format: userId_timestamp_hash
-function extractUserIdFromTrackingId(trackingId) {
+// Extract user ID from tracking ID format: tracking-userId_timestamp_hash
+// Helper function to get 8-character user code from full user ID
+function getUserCode(fullUserId) {
+  if (!fullUserId || fullUserId === 'default') {
+    return 'default8'; // Fallback for default user
+  }
+  
+  // Extract first 8 characters from user ID
+  const userCode = fullUserId.substring(0, 8);
+  console.log('[USER CODE] Generated from full ID:', fullUserId, '->', userCode);
+  return userCode;
+}
+
+// Helper function to get full user ID from users.json (when needed for tracking ID generation)
+async function getFullUserIdFromUsername(username = 'colton.fidelman') {
   try {
-    if (!trackingId) return 'default';
+    // In a real system, this would query the user database
+    // For now, we'll use the known user ID from users.json
+    const knownUsers = {
+      'colton.fidelman': '76e84c79-9b13-4c55-be86-d0bd9baa9411'
+    };
     
-    // Format: userId_timestamp_hash
-    const parts = trackingId.split('_');
-    if (parts.length >= 3) {
-      const userId = parts[0];
-      console.log('[USER ID] Extracted from tracking ID:', userId);
-      return userId;
-    }
-    
-    console.log('[USER ID] Could not parse tracking ID, using default:', trackingId);
-    return 'default';
+    return knownUsers[username] || 'default';
   } catch (error) {
-    console.error('[USER ID] Error extracting user ID:', error);
+    console.error('[USER ID] Error getting full user ID:', error);
     return 'default';
   }
 }
 
-// Fetch timezone from lead agent settings
-async function getTimezoneFromSettings(userId = 'default') {
+function extractUserIdFromTrackingId(trackingId) {
   try {
-    console.log('[SETTINGS] Fetching timezone from lead agent settings for user:', userId);
+    if (!trackingId) return 'default8'; // Return 8-char code for default
+    
+    // Format: tracking-userCode_timestamp_hash where userCode is first 8 chars of user ID
+    if (trackingId.startsWith('tracking-')) {
+      const withoutPrefix = trackingId.substring('tracking-'.length);
+      const parts = withoutPrefix.split('_');
+      if (parts.length >= 3) {
+        const userCode = parts[0];
+        console.log('[USER CODE] Extracted from tracking ID:', userCode);
+        return userCode;
+      }
+    }
+    
+    // Fallback: try old format userCode_timestamp_hash
+    const parts = trackingId.split('_');
+    if (parts.length >= 3) {
+      const userCode = parts[0];
+      console.log('[USER CODE] Extracted from tracking ID (fallback):', userCode);
+      return userCode;
+    }
+    
+    console.log('[USER CODE] Could not parse tracking ID, using default8:', trackingId);
+    return 'default8'; // Return 8-char code for default
+  } catch (error) {
+    console.error('[USER CODE] Error extracting user code:', error);
+    return 'default8'; // Return 8-char code for default
+  }
+}
+
+// Fetch timezone from lead agent settings
+async function getTimezoneFromSettings(userCode = 'default8') {
+  try {
+    console.log('[SETTINGS] Fetching timezone from lead agent settings for user code:', userCode);
     
     // Try to load settings from the same source as agent settings
     let agentSettings = {};
     try {
-      agentSettings = await loadAgentSettings(userId);
+      agentSettings = await loadAgentSettings(userCode);
       console.log('[SETTINGS] All available settings:', Object.keys(agentSettings));
       console.log('[SETTINGS] Looking for timezone field...');
       
@@ -490,9 +529,9 @@ async function getTimezoneFromSettings(userId = 'default') {
 }
 
 // Get user's Google Calendar ID from Zilliz settings
-async function getCalendarIdFromSettings(userId = 'default') {
+async function getCalendarIdFromSettings(userCode = 'default8') {
   try {
-    console.log('[SETTINGS] Fetching calendar ID from lead agent settings for user:', userId);
+    console.log('[SETTINGS] Fetching calendar ID from lead agent settings for user code:', userCode);
     
     // Try direct Zilliz query for calendar_id setting
     if (process.env.ZILLIZ_ENDPOINT && process.env.ZILLIZ_TOKEN) {
@@ -502,26 +541,26 @@ async function getCalendarIdFromSettings(userId = 'default') {
           token: process.env.ZILLIZ_TOKEN
         });
 
-        // Query for calendar_id setting specifically
+        // Query for calendar_id setting specifically using user_code
         const searchResult = await client.search({
           collection_name: 'agent_settings',
           vector: [0.1, 0.2], // Dummy vector since we're using filter
           limit: 10,
-          filter: `user_id == "${userId}" && setting_key == "calendar_id"`
+          filter: `user_code == "${userCode}" && setting_key == "calendar_id"`
         });
 
         console.log('[SETTINGS] Zilliz search result:', searchResult);
         
         if (searchResult.results && searchResult.results.length > 0) {
           for (const result of searchResult.results) {
-            if (result.user_id === userId && result.setting_key === 'calendar_id') {
+            if (result.user_code === userCode && result.setting_key === 'calendar_id') {
               console.log('[SETTINGS] Found calendar ID in Zilliz:', result.setting_value);
               return result.setting_value;
             }
           }
         }
         
-        console.log('[SETTINGS] No calendar_id setting found in Zilliz for user:', userId);
+        console.log('[SETTINGS] No calendar_id setting found in Zilliz for user code:', userCode);
       } catch (zillizError) {
         console.log('[SETTINGS] Zilliz query failed:', zillizError.message);
       }
@@ -530,7 +569,7 @@ async function getCalendarIdFromSettings(userId = 'default') {
     // Try to load settings from the same source as agent settings (fallback)
     let agentSettings = {};
     try {
-      agentSettings = await loadAgentSettings(userId);
+      agentSettings = await loadAgentSettings(userCode);
       console.log('[SETTINGS] Agent settings loaded successfully, keys:', Object.keys(agentSettings));
       console.log('[SETTINGS] Looking for calendar_id field...');
       console.log('[SETTINGS] calendar_id value:', agentSettings.calendar_id);
@@ -1154,7 +1193,7 @@ function generateReplySubject(originalSubject, trackingId) {
 }
 
 // Load agent settings from Zilliz
-async function loadAgentSettings(userId = 'default') {
+async function loadAgentSettings(userCode = 'default8') {
   try {
     if (!process.env.ZILLIZ_ENDPOINT || !process.env.ZILLIZ_TOKEN) {
       console.log('⚠️ [SETTINGS] No Zilliz credentials, using defaults');
@@ -1166,18 +1205,18 @@ async function loadAgentSettings(userId = 'default') {
       token: process.env.ZILLIZ_TOKEN
     });
 
-    // Query all settings for the user
+    // Query all settings for the user code
     const searchResult = await client.search({
       collection_name: 'agent_settings',
       vector: [0.1, 0.2], // Dummy vector since we're using filter
       limit: 100,
-      filter: `user_id == "${userId}"`
+      filter: `user_code == "${userCode}"`
     });
 
     const settings = {};
     if (searchResult.results && searchResult.results.length > 0) {
       for (const result of searchResult.results) {
-        if (result.user_id === userId) {
+        if (result.user_code === userCode) {
           // Parse setting_value based on setting_type
           let value;
           try {
@@ -1200,7 +1239,7 @@ async function loadAgentSettings(userId = 'default') {
       }
     }
 
-    console.log('⚙️ [SETTINGS] Loaded settings from Zilliz:', Object.keys(settings));
+    console.log('⚙️ [SETTINGS] Loaded settings from Zilliz for user code:', userCode, 'Keys:', Object.keys(settings));
     return Object.keys(settings).length > 0 ? settings : getDefaultSettings();
 
   } catch (error) {
