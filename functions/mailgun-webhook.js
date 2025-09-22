@@ -8,9 +8,16 @@ import crypto from 'crypto';
 // === UTILITY FUNCTIONS ===
 
 function parseMailgunPayload(event) {
-  const body = Buffer.from(event.body, 'base64').toString();
-  const formData = new URLSearchParams(body);
-  return Object.fromEntries(formData);
+  // Check if body is base64 encoded (real Mailgun webhooks)
+  if (event.isBase64Encoded) {
+    const body = Buffer.from(event.body, 'base64').toString();
+    const formData = new URLSearchParams(body);
+    return Object.fromEntries(formData);
+  } else {
+    // Plain text body (curl tests)
+    const formData = new URLSearchParams(event.body);
+    return Object.fromEntries(formData);
+  }
 }
 
 function parseMessageHeaders(formData) {
@@ -43,15 +50,15 @@ function extractUserIdFromTrackingId(trackingId) {
 // === ZILLIZ CLIENT SETUP ===
 
 const milvusClient = new MilvusClient({
-  address: process.env.ZILLIZ_ENDPOINT,
+  address: process.env.ZILLIZ_ENDPOINT?.trim(),
   ssl: true,
-  username: 'db_admin',
-  password: process.env.ZILLIZ_TOKEN,
+  token: process.env.ZILLIZ_TOKEN?.trim(),
 });
 
 // Test Zilliz connection
 async function testZillizConnection() {
   try {
+    console.log('[ZILLIZ] endpoint ok:', !!process.env.ZILLIZ_ENDPOINT, ' token len:', (process.env.ZILLIZ_TOKEN||'').trim().length);
     console.log('[ZILLIZ] Testing connection...');
     const collections = await milvusClient.listCollections();
     console.log('[ZILLIZ] Connection successful, collections:', collections.data);
