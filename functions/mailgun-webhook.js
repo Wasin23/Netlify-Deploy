@@ -599,8 +599,6 @@ Tools available:
 Provide excellent sales support using the user's personalized settings!`;
 }
 
-const STATIC_SYSTEM_PROMPT = createSystemPrompt(); // Fallback if settings not available
-
 // === MAIN HANDLER ===
 
 export async function handler(event) {
@@ -699,10 +697,16 @@ export async function handler(event) {
     let userSettings = null;
     try {
       const userId = extractUserIdFromTrackingId(trackingId);
+      console.log('[WEBHOOK] Extracted userId:', userId);
       if (userId) {
+        console.log('[WEBHOOK] Calling getUserSettings tool...');
         const settingsResult = await getUserSettingsTool.func({ tracking_id: trackingId });
+        console.log('[WEBHOOK] getUserSettings raw result:', settingsResult);
         userSettings = JSON.parse(settingsResult);
+        console.log('[WEBHOOK] Parsed userSettings:', userSettings);
         console.log('[WEBHOOK] Using personalized settings for', userId);
+      } else {
+        console.log('[WEBHOOK] No userId extracted from trackingId:', trackingId);
       }
     } catch (error) {
       console.error('[WEBHOOK] Failed to get user settings:', error);
