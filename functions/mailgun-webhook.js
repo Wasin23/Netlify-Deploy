@@ -181,12 +181,10 @@ const getUserSettingsTool = new DynamicStructuredTool({
       console.log(`[TOOL] Query result:`, rows);
       
       if (rows.length === 0) {
-        console.log(`[TOOL] No settings found for user ${userId}, using defaults`);
+        console.log(`[TOOL] No settings found for user ${userId} - settings must be configured first`);
         return JSON.stringify({
-          calendar_id: 'colton.fidd@gmail.com', // Your actual calendar ID as default
-          company_name: 'Exabits',
-          timezone: 'America/Los_Angeles',
-          response_tone: 'professional_friendly'
+          error: "No user settings found in Zilliz. Please configure your Email Response Settings first.",
+          settings_required: true
         });
       }
       
@@ -194,24 +192,25 @@ const getUserSettingsTool = new DynamicStructuredTool({
       const settings = JSON.parse(rows[0].setting_value);
       console.log(`[TOOL] Found settings for user ${userId}:`, settings);
       
-      // Ensure required fields exist
+      // Return ONLY what's in Zilliz - no fallbacks
       const finalSettings = {
-        calendar_id: settings.calendar_id || 'colton.fidd@gmail.com',
-        company_name: settings.company_name || 'Exabits',
-        timezone: settings.timezone || 'America/Los_Angeles',
-        response_tone: settings.response_tone || 'professional_friendly'
+        calendar_id: settings.calendar_id,
+        company_name: settings.company_name,
+        timezone: settings.timezone,
+        response_tone: settings.response_tone,
+        ai_assistant_name: settings.ai_assistant_name,
+        product_name: settings.product_name,
+        value_propositions: settings.value_propositions
       };
       
-      console.log(`[TOOL] Final settings:`, finalSettings);
+      console.log(`[TOOL] Final settings (Zilliz only):`, finalSettings);
       return JSON.stringify(finalSettings);
       
     } catch (error) {
       console.error('[TOOL] Error getting user settings:', error);
       return JSON.stringify({
-        calendar_id: 'primary',
-        signature: 'ExaMark AI Assistant',
-        company_name: 'Our Company',
-        user_name: '[Your Name]'
+        error: `Failed to retrieve user settings: ${error.message}`,
+        settings_required: true
       });
     }
   }
@@ -525,16 +524,16 @@ const model = new ChatOpenAI({
 
 // Dynamic system prompt that uses user settings
 function createSystemPrompt(userSettings) {
-  const settings = userSettings || {
-    company_name: 'Exabits',
-    ai_assistant_name: 'ExaMark',
-    timezone: 'America/Los_Angeles',
-    response_tone: 'professional_friendly',
-    calendar_id: 'primary'
-  };
+  if (!userSettings || userSettings.error) {
+    return `You are an AI assistant that cannot properly function because user settings are not configured. 
+
+Please inform the user: "I need you to configure your Email Response Settings first before I can assist you properly. Please set up your settings in the ExaMark interface."
+
+Do not attempt to create calendar events or send detailed responses without proper configuration.`;
+  }
 
   // Calculate dates in user's timezone
-  const userTimezone = settings.timezone || 'America/Los_Angeles';
+  const userTimezone = userSettings.timezone;
   const today = new Date().toLocaleDateString('en-US', { 
     year: 'numeric', month: '2-digit', day: '2-digit', 
     timeZone: userTimezone 
@@ -550,15 +549,15 @@ function createSystemPrompt(userSettings) {
     timeZone: userTimezone 
   });
 
-  return `You are ${settings.ai_assistant_name || 'ExaMark'}, the AI sales assistant for ${settings.company_name || 'Exabits'}.
+  return `You are ${userSettings.ai_assistant_name}, the AI sales assistant for ${userSettings.company_name}.
 
 COMPANY INFO:
-- Company: ${settings.company_name || 'Exabits'}
-- Product: ${settings.product_name || 'AI-Powered High-Performance Computing Solutions'}
-- Value Props: ${settings.value_propositions?.join(', ') || '30% cost reduction, performance optimization'}
-- Your Name: ${settings.ai_assistant_name || 'ExaMark'}
-- Response Tone: ${settings.response_tone || 'professional_friendly'}
-- Calendar ID: ${settings.calendar_id || 'primary'}
+- Company: ${userSettings.company_name}
+- Product: ${userSettings.product_name}
+- Value Props: ${userSettings.value_propositions?.join(', ')}
+- Your Name: ${userSettings.ai_assistant_name}
+- Response Tone: ${userSettings.response_tone}
+- Calendar ID: ${userSettings.calendar_id}
 
 USER TIMEZONE SETTINGS:
 - User Timezone: ${userTimezone}
@@ -571,9 +570,9 @@ DATE CONSTRUCTION (using user's ${userTimezone} timezone):
 - For "today at 2pm": use "${today}T14:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
 
 BEHAVIOR SETTINGS:
-- Meeting Pushiness: ${settings.meeting_pushiness || 'medium'}
-- Technical Depth: ${settings.technical_depth || 'medium'}
-- Show AI Disclaimer: ${settings.show_ai_disclaimer || true}
+- Meeting Pushiness: ${userSettings.meeting_pushiness}
+- Technical Depth: ${userSettings.technical_depth}
+- Show AI Disclaimer: ${userSettings.show_ai_disclaimer}
 
 YOUR JOB:
 1. ALWAYS start by using get_user_settings tool to get current user configuration
@@ -584,8 +583,8 @@ YOUR JOB:
 IMPORTANT RULES:
 - Use EXACTLY the dates shown above for ${userTimezone} timezone
 - If timezone not specified in meeting request, assume user's timezone (${userTimezone})
-- Use company name "${settings.company_name}" and your assistant name "${settings.ai_assistant_name}"
-- Match response tone: ${settings.response_tone}
+- Use company name "${userSettings.company_name}" and your assistant name "${userSettings.ai_assistant_name}"
+- Match response tone: ${userSettings.response_tone}
 - For calendar events, use timezone: ${userTimezone}
 - ALWAYS use provided In-Reply-To and References headers for email threading
 - Subject lines: prefix with "Re:" for replies
