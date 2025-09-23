@@ -412,6 +412,20 @@ const sendEmailTool = new DynamicStructuredTool({
       
       console.log(`[TOOL] Email sent successfully: ${messageId}`);
       
+      // Log the actual email content that was sent (not internal AI thoughts)
+      try {
+        await storeEventTool.func({
+          tracking_id: tracking_id,
+          event_type: 'ai_reply',
+          event_content: `Subject: ${subject}\n\nTo: ${to}\n\n${body}`,
+          email_address: 'replies@mg.examarkchat.com',
+          recipient: to
+        });
+        console.log('[TOOL] Logged sent email content');
+      } catch (error) {
+        console.error('[TOOL] Failed to log email content:', error);
+      }
+      
       return JSON.stringify({
         success: true,
         message_id: messageId,
@@ -514,31 +528,31 @@ const SYSTEM_PROMPT = `You are an AI-powered sales assistant with access to tool
 1. ALWAYS start by using get_user_settings tool to learn about the company you're representing
 2. When someone proposes a meeting time, use create_calendar_event tool to schedule it with correct dates
 3. Use send_email tool to reply to prospects
-4. Use store_event tool to log important interactions (use 'event_content' parameter for actual email/reply content)
+4. Use store_event tool ONLY for significant events (calendar_created, not your internal thoughts)
 
-CURRENT DATE/TIME INFO:
-- Today is: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-- Current date: ${new Date().toISOString().split('T')[0]}
-- Tomorrow's date: ${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}
+CURRENT DATE/TIME INFO (Eastern Time Zone):
+- Today is: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/New_York' })}
+- Current date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}
+- Tomorrow's date: ${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}
+
+TIMEZONE HANDLING:
+- If someone says "tomorrow at 4pm" without specifying timezone, ASK for timezone confirmation
+- Common US timezones: EST (-05:00), CST (-06:00), MST (-07:00), PST (-08:00)
+- ALWAYS confirm timezone before scheduling: "Just to confirm, that's 4pm Eastern Time (EST), correct?"
 
 DATE CONSTRUCTION EXAMPLES:
-- For "tomorrow at 3pm PST": use "${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}T15:00:00-08:00"
-- For "tomorrow at 5pm EST": use "${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}T17:00:00-05:00"  
-- For "today at 2pm PST": use "${new Date().toISOString().split('T')[0]}T14:00:00-08:00"
-
-TIMEZONE OFFSETS:
-- PST (Pacific Standard Time): -08:00
-- EST (Eastern Standard Time): -05:00
-- CST (Central Standard Time): -06:00
-- MST (Mountain Standard Time): -07:00
+- For "tomorrow at 4pm EST": use "${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}T16:00:00-05:00"
+- For "tomorrow at 3pm PST": use "${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}T15:00:00-08:00"  
+- For "today at 2pm EST": use "${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}T14:00:00-05:00"
 
 IMPORTANT RULES:
 - ALWAYS use tools when appropriate - this is critical for system functionality
-- When you see meeting time proposals like "tomorrow at 3pm PST", create calendar event using EXACTLY tomorrow's date above
-- Use the DATE CONSTRUCTION EXAMPLES above to build proper ISO datetime strings
+- When someone proposes meeting time WITHOUT timezone, ask for timezone confirmation first
+- Use EXACTLY the dates shown above - today is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}, tomorrow is ${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}
+- Convert times correctly: 4pm = 16:00:00, 3pm = 15:00:00, etc.
 - Write natural business emails, never include technical data or JSON in email content
 - Use company information from settings to personalize your responses
-- When using store_event tool, put actual email content in 'event_content' parameter (not user agent info)
+- DO NOT use store_event for your internal thoughts - only for actual events like calendar_created
 - ALWAYS use the provided In-Reply-To and References headers when sending email replies for proper threading
 - For subject lines, prefix with "Re: " when replying to maintain email thread
 
@@ -546,7 +560,7 @@ Tools available:
 - get_user_settings: Get company info and settings
 - create_calendar_event: Schedule meetings when times are proposed (use correct dates!)
 - send_email: Send professional replies
-- store_event: Log interactions with actual content
+- store_event: Log ONLY significant events (not your thoughts)
 - get_conversation: View conversation history
 
 Use these tools actively to provide excellent sales support.`;
@@ -698,21 +712,8 @@ Please process this email appropriately. If it contains a meeting request or tim
       input: input
     });
     
-    // After agent processes, automatically log the AI response if one was generated
-    try {
-      if (agentResponse.output && agentResponse.output.trim()) {
-        await storeEventTool.func({
-          tracking_id: trackingId,
-          event_type: 'ai_reply',
-          event_content: agentResponse.output,
-          email_address: emailData.to,
-          recipient: emailData.from
-        });
-        console.log('[WEBHOOK] Logged AI response');
-      }
-    } catch (error) {
-      console.error('[WEBHOOK] Failed to log AI response:', error);
-    }
+    // Note: Removed automatic AI response logging to avoid cluttering tracking with internal thoughts
+    // AI will manually log significant events like calendar_created using store_event tool
     
     console.log('[WEBHOOK] Agent response:', agentResponse);
     
