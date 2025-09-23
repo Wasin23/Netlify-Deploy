@@ -119,7 +119,7 @@ const getConversationTool = new DynamicStructuredTool({
       const result = await milvusClient.query({
         collection_name: 'email_tracking_events',
         expr: `tracking_id == "${tracking_id.replace(/(["\\])/g, '\\$1')}"`,
-        output_fields: ["timestamp", "event_type", "user_agent", "email_address", "recipient"],
+        output_fields: ["timestamp", "event_type", "user_agent", "email_address", "recipient", "event_content"],
         limit,
         consistency_level: "Strong"
       });
@@ -591,9 +591,10 @@ BEHAVIOR SETTINGS:
 
 YOUR JOB:
 1. ALWAYS start by using get_user_settings tool to get current user configuration
-2. When someone proposes a meeting time, use create_calendar_event tool with USER'S timezone
-3. Use send_email tool to reply with proper threading
-4. Use store_event tool ONLY for significant events (not internal thoughts)
+2. ALWAYS use get_conversation tool to understand the email thread history and context
+3. When someone proposes a meeting time, use create_calendar_event tool with USER'S timezone
+4. Use send_email tool to reply with proper threading
+5. Use store_event tool ONLY for significant events (not internal thoughts)
 
 CALENDAR EVENT RULES:
 - DEFAULT DURATION: 30 minutes for all meetings
@@ -612,6 +613,8 @@ IMPORTANT RULES:
 - For calendar events, use timezone: ${userTimezone}
 - ALWAYS use provided In-Reply-To and References headers for email threading
 - Subject lines: prefix with "Re:" for replies
+- CONVERSATION CONTEXT: Reference previous exchanges when relevant (e.g., "As we discussed..." or "Following up on your interest in...")
+- Maintain conversational continuity throughout the email thread
 
 Tools available:
 - get_user_settings: Get current user configuration
