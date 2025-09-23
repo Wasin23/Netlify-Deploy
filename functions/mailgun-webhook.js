@@ -222,7 +222,7 @@ const createCalendarEventTool = new DynamicStructuredTool({
   description: "Create a Google Calendar event when meeting time is confirmed. DEFAULT DURATION: 30 minutes. Parse exact times (3pm = 15:00 NOT 16:00).",
   schema: z.object({
     calendar_id: z.string().default('primary').describe("Calendar ID to create event in"),
-    start_time: z.string().describe("ISO datetime string for event start (e.g., 2025-09-23T15:00:00-08:00 for 3pm PST)"),
+    start_time: z.string().describe("ISO datetime string for event start (e.g., 2025-09-23T15:00:00-07:00 for 3pm PDT)"),
     end_time: z.string().optional().describe("ISO datetime string for event end - if not provided, will add 30 minutes to start_time"),
     title: z.string().default("Sales Discussion").describe("Event title"),
     attendees: z.array(z.string()).describe("Array of email addresses to invite"),
@@ -580,9 +580,9 @@ USER TIMEZONE SETTINGS:
 - Tomorrow's date: ${tomorrow}
 
 DATE CONSTRUCTION (using user's ${userTimezone} timezone):
-- For "tomorrow at 3pm": use "${tomorrow}T15:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
-- For "tomorrow at 5pm": use "${tomorrow}T17:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
-- For "today at 2pm": use "${today}T14:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
+- For "tomorrow at 3pm": use "${tomorrow}T15:00:00${userTimezone === 'America/Los_Angeles' ? '-07:00' : userTimezone === 'America/New_York' ? '-04:00' : '-05:00'}"
+- For "tomorrow at 5pm": use "${tomorrow}T17:00:00${userTimezone === 'America/Los_Angeles' ? '-07:00' : userTimezone === 'America/New_York' ? '-04:00' : '-05:00'}"
+- For "today at 2pm": use "${today}T14:00:00${userTimezone === 'America/Los_Angeles' ? '-07:00' : userTimezone === 'America/New_York' ? '-04:00' : '-05:00'}"
 
 BEHAVIOR SETTINGS:
 - Meeting Pushiness: ${userSettings.meeting_pushiness}
