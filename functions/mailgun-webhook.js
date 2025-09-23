@@ -238,6 +238,18 @@ const createCalendarEventTool = new DynamicStructuredTool({
       }
       
       console.log(`[TOOL] Creating calendar event: ${title} from ${start_time} to ${end_time}`);
+      console.log(`[TOOL] Timezone being used: ${timezone}`);
+      console.log(`[TOOL] Calendar ID: ${calendar_id}`);
+      
+      // Log the exact event object being sent to Google
+      const eventToCreate = {
+        summary: title,
+        start: { dateTime: start_time, timeZone: timezone },
+        end: { dateTime: end_time, timeZone: timezone },
+        description: `Meeting scheduled through ExaMark AI Assistant\n\nContact: ${attendees.join(', ')}`
+      };
+      
+      console.log(`[TOOL] Event object being sent to Google Calendar:`, JSON.stringify(eventToCreate, null, 2));
       
       // Create JWT for Google OAuth
       const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -316,12 +328,7 @@ const createCalendarEventTool = new DynamicStructuredTool({
       console.log('[TOOL] Got access token successfully');
       
       // Create calendar event (no attendees - service account lacks permission)
-      const event = {
-        summary: title,
-        start: { dateTime: start_time, timeZone: timezone },
-        end: { dateTime: end_time, timeZone: timezone },
-        description: `Meeting scheduled through ExaMark AI Assistant\n\nContact: ${attendees.join(', ')}`
-      };
+      const event = eventToCreate;
       
       const calendarResponse = await fetch(
         `https://www.googleapis.com/calendar/v3/calendars/${calendar_id}/events`,
@@ -573,6 +580,7 @@ USER TIMEZONE SETTINGS:
 - Tomorrow's date: ${tomorrow}
 
 DATE CONSTRUCTION (using user's ${userTimezone} timezone):
+- For "tomorrow at 3pm": use "${tomorrow}T15:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
 - For "tomorrow at 5pm": use "${tomorrow}T17:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
 - For "today at 2pm": use "${today}T14:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
 
