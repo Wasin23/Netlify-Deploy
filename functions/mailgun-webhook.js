@@ -523,47 +523,84 @@ const model = new ChatOpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const SYSTEM_PROMPT = `You are an AI-powered sales assistant with access to tools. Your job is to:
+// Dynamic system prompt that uses user settings
+function createSystemPrompt(userSettings) {
+  const settings = userSettings || {
+    company_name: 'Exabits',
+    ai_assistant_name: 'ExaMark',
+    timezone: 'America/Los_Angeles',
+    response_tone: 'professional_friendly',
+    calendar_id: 'primary'
+  };
 
-1. ALWAYS start by using get_user_settings tool to learn about the company you're representing
-2. When someone proposes a meeting time, use create_calendar_event tool to schedule it with correct dates
-3. Use send_email tool to reply to prospects
-4. Use store_event tool ONLY for significant events (calendar_created, not your internal thoughts)
+  // Calculate dates in user's timezone
+  const userTimezone = settings.timezone || 'America/Los_Angeles';
+  const today = new Date().toLocaleDateString('en-US', { 
+    year: 'numeric', month: '2-digit', day: '2-digit', 
+    timeZone: userTimezone 
+  }).replace(/\//g, '-');
+  
+  const tomorrow = new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { 
+    year: 'numeric', month: '2-digit', day: '2-digit', 
+    timeZone: userTimezone 
+  }).replace(/\//g, '-');
 
-CURRENT DATE/TIME INFO (Eastern Time Zone):
-- Today is: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/New_York' })}
-- Current date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}
-- Tomorrow's date: ${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}
+  const todayLong = new Date().toLocaleDateString('en-US', { 
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: userTimezone 
+  });
 
-TIMEZONE HANDLING:
-- If someone says "tomorrow at 4pm" without specifying timezone, ASK for timezone confirmation
-- Common US timezones: EST (-05:00), CST (-06:00), MST (-07:00), PST (-08:00)
-- ALWAYS confirm timezone before scheduling: "Just to confirm, that's 4pm Eastern Time (EST), correct?"
+  return `You are ${settings.ai_assistant_name || 'ExaMark'}, the AI sales assistant for ${settings.company_name || 'Exabits'}.
 
-DATE CONSTRUCTION EXAMPLES:
-- For "tomorrow at 4pm EST": use "${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}T16:00:00-05:00"
-- For "tomorrow at 3pm PST": use "${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}T15:00:00-08:00"  
-- For "today at 2pm EST": use "${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}T14:00:00-05:00"
+COMPANY INFO:
+- Company: ${settings.company_name || 'Exabits'}
+- Product: ${settings.product_name || 'AI-Powered High-Performance Computing Solutions'}
+- Value Props: ${settings.value_propositions?.join(', ') || '30% cost reduction, performance optimization'}
+- Your Name: ${settings.ai_assistant_name || 'ExaMark'}
+- Response Tone: ${settings.response_tone || 'professional_friendly'}
+- Calendar ID: ${settings.calendar_id || 'primary'}
+
+USER TIMEZONE SETTINGS:
+- User Timezone: ${userTimezone}
+- Today is: ${todayLong} (in ${userTimezone})
+- Current date: ${today}
+- Tomorrow's date: ${tomorrow}
+
+DATE CONSTRUCTION (using user's ${userTimezone} timezone):
+- For "tomorrow at 5pm": use "${tomorrow}T17:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
+- For "today at 2pm": use "${today}T14:00:00${userTimezone === 'America/Los_Angeles' ? '-08:00' : userTimezone === 'America/New_York' ? '-05:00' : '-06:00'}"
+
+BEHAVIOR SETTINGS:
+- Meeting Pushiness: ${settings.meeting_pushiness || 'medium'}
+- Technical Depth: ${settings.technical_depth || 'medium'}
+- Show AI Disclaimer: ${settings.show_ai_disclaimer || true}
+
+YOUR JOB:
+1. ALWAYS start by using get_user_settings tool to get current user configuration
+2. When someone proposes a meeting time, use create_calendar_event tool with USER'S timezone
+3. Use send_email tool to reply with proper threading
+4. Use store_event tool ONLY for significant events (not internal thoughts)
 
 IMPORTANT RULES:
-- ALWAYS use tools when appropriate - this is critical for system functionality
-- When someone proposes meeting time WITHOUT timezone, ask for timezone confirmation first
-- Use EXACTLY the dates shown above - today is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}, tomorrow is ${new Date(Date.now() + 24*60*60*1000).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' }).replace(/\//g, '-')}
-- Convert times correctly: 4pm = 16:00:00, 3pm = 15:00:00, etc.
-- Write natural business emails, never include technical data or JSON in email content
-- Use company information from settings to personalize your responses
-- DO NOT use store_event for your internal thoughts - only for actual events like calendar_created
-- ALWAYS use the provided In-Reply-To and References headers when sending email replies for proper threading
-- For subject lines, prefix with "Re: " when replying to maintain email thread
+- Use EXACTLY the dates shown above for ${userTimezone} timezone
+- If timezone not specified in meeting request, assume user's timezone (${userTimezone})
+- Use company name "${settings.company_name}" and your assistant name "${settings.ai_assistant_name}"
+- Match response tone: ${settings.response_tone}
+- For calendar events, use timezone: ${userTimezone}
+- ALWAYS use provided In-Reply-To and References headers for email threading
+- Subject lines: prefix with "Re:" for replies
 
 Tools available:
-- get_user_settings: Get company info and settings
-- create_calendar_event: Schedule meetings when times are proposed (use correct dates!)
-- send_email: Send professional replies
-- store_event: Log ONLY significant events (not your thoughts)
+- get_user_settings: Get current user configuration
+- create_calendar_event: Schedule meetings in user's timezone
+- send_email: Send professional replies with threading
+- store_event: Log significant events only
 - get_conversation: View conversation history
 
-Use these tools actively to provide excellent sales support.`;
+Provide excellent sales support using the user's personalized settings!`;
+}
+
+const STATIC_SYSTEM_PROMPT = createSystemPrompt(); // Fallback if settings not available
 
 // === MAIN HANDLER ===
 
@@ -659,9 +696,26 @@ export async function handler(event) {
       storeEventTool
     ];
     
+    // Get user settings first to create personalized system prompt
+    let userSettings = null;
+    try {
+      const userId = extractUserIdFromTrackingId(trackingId);
+      if (userId) {
+        const settingsResult = await getUserSettingsTool.func({ tracking_id: trackingId });
+        userSettings = JSON.parse(settingsResult);
+        console.log('[WEBHOOK] Using personalized settings for', userId);
+      }
+    } catch (error) {
+      console.error('[WEBHOOK] Failed to get user settings:', error);
+    }
+
+    // Create personalized system prompt based on user settings
+    const systemPrompt = createSystemPrompt(userSettings);
+    console.log('[WEBHOOK] Generated personalized system prompt');
+
     // Create the prompt template for the agent
     const prompt = ChatPromptTemplate.fromMessages([
-      ["system", SYSTEM_PROMPT],
+      ["system", systemPrompt],
       ["user", "{input}"],
       new MessagesPlaceholder("agent_scratchpad")
     ]);
