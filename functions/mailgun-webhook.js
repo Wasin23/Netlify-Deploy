@@ -539,6 +539,8 @@ IMPORTANT RULES:
 - Write natural business emails, never include technical data or JSON in email content
 - Use company information from settings to personalize your responses
 - When using store_event tool, put actual email content in 'event_content' parameter (not user agent info)
+- ALWAYS use the provided In-Reply-To and References headers when sending email replies for proper threading
+- For subject lines, prefix with "Re: " when replying to maintain email thread
 
 Tools available:
 - get_user_settings: Get company info and settings
@@ -670,8 +672,13 @@ export async function handler(event) {
 Subject: ${emailData.subject}
 Body: ${emailData.body}
 Tracking ID: ${trackingId}
+Original Message-ID: ${emailData.messageId || 'unknown'}
 
-Please process this email appropriately. If it contains a meeting request or time proposal, create a calendar event AND send a professional reply.`;
+THREADING INFO FOR REPLIES:
+- Use In-Reply-To: ${emailData.messageId || ''}
+- Use References: ${emailData.references ? emailData.references + ' ' + emailData.messageId : emailData.messageId || ''}
+
+Please process this email appropriately. If it contains a meeting request or time proposal, create a calendar event AND send a professional reply with proper threading headers.`;
 
     // First, automatically log the incoming lead message
     try {
