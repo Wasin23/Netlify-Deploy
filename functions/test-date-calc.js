@@ -1,18 +1,64 @@
 // Test endpoint to check date calculations with user timezone settings
 export const handler = async (event, context) => {
   try {
-    // Mock user settings (your actual settings)
-    const mockSettings = {
-      company_name: "Exabits",
-      product_name: "AI-Powered High-Performance Computing Solutions", 
-      value_propositions: ["30% cost reduction"],
-      ai_assistant_name: "ExaCole",
-      timezone: "America/Los_Angeles", // PST timezone
-      response_tone: "professional_friendly",
-      calendar_id: "COLTON.FIDD@GMAIL.COM"
-    };
+    // Actually pull from Zilliz instead of using mock data
+    const testUserId = "76e84c79"; // Your 8-character user ID
+    
+    let userSettings = null;
+    
+    try {
+      // Test Zilliz connection and get real settings
+      const { MilvusClient } = await import('@zilliz/milvus2-sdk-node');
+      
+      const milvusClient = new MilvusClient({
+        address: process.env.ZILLIZ_ENDPOINT,
+        token: process.env.ZILLIZ_TOKEN,
+        ssl: true
+      });
+      
+      console.log('[TEST] Testing Zilliz connection...');
+      await milvusClient.loadCollection({ collection_name: 'agent_settings' });
+      
+      // Query for actual user settings
+      const result = await milvusClient.query({
+        collection_name: 'agent_settings',
+        expr: `setting_key == "email_response_settings" && user_id == "${testUserId}"`,
+        output_fields: ['setting_value', 'updated_at'],
+        limit: 1,
+        consistency_level: 'Strong'
+      });
+      
+      const rows = result.data || result || [];
+      console.log('[TEST] Zilliz query result:', rows);
+      
+      if (rows.length > 0) {
+        userSettings = JSON.parse(rows[0].setting_value);
+        console.log('[TEST] Found real user settings:', userSettings);
+      } else {
+        console.log('[TEST] No settings found in Zilliz for user:', testUserId);
+        return {
+          statusCode: 404,
+          body: JSON.stringify({
+            error: "No user settings found in Zilliz",
+            user_id: testUserId,
+            message: "This proves the webhook might also be failing to get settings"
+          })
+        };
+      }
+      
+    } catch (zillizError) {
+      console.error('[TEST] Zilliz connection failed:', zillizError);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: "Failed to connect to Zilliz",
+          details: zillizError.message,
+          message: "This could be why the webhook isn't getting settings"
+        })
+      };
+    }
 
-    const userTimezone = mockSettings.timezone;
+    const userTimezone = userSettings.timezone;
     const now = new Date();
     
     // Calculate dates in user's timezone (PST)
@@ -54,7 +100,7 @@ export const handler = async (event, context) => {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userSettings: mockSettings,
+        userSettings: userSettings,
         timezone_info: {
           user_timezone: userTimezone,
           user_current_time: userCurrentTime,
@@ -72,7 +118,7 @@ export const handler = async (event, context) => {
           "should_schedule_for": testScenarios.tomorrow_5pm_pst,
           "calendar_date": tomorrow
         },
-        ai_prompt_preview: `Today is: ${todayLong} (in ${userTimezone})\nTomorrow: ${tomorrow}\nAI Name: ${mockSettings.ai_assistant_name}\nCompany: ${mockSettings.company_name}`
+        ai_prompt_preview: `Today is: ${todayLong} (in ${userTimezone})\nTomorrow: ${tomorrow}\nAI Name: ${userSettings.ai_assistant_name}\nCompany: ${userSettings.company_name}`
       }, null, 2)
     };
     
