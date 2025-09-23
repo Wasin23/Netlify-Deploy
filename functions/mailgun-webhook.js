@@ -216,19 +216,273 @@ const getUserSettingsTool = new DynamicStructuredTool({
   }
 });
 
-// Tool 3: Create calendar event (with proper OAuth flow)
+// Tool 2: Check Calendar Availability and Suggest Alternatives
+const checkAvailabilityTool = new DynamicStructuredTool({
+  name: "check_availability",
+  description: "Check calendar availability for requested time and suggest alternatives if busy. Always use before creating calendar events.",
+  schema: z.object({
+    calendar_id: z.string().describe("User's calendar ID to check availability"),
+    requested_time: z.string().describe("ISO datetime string for requested meeting time"),
+    duration_minutes: z.number().default(30).describe("Meeting duration in minutes"),
+    timezone: z.string().describe("Timezone for scheduling")
+  }),
+  func: async ({ calendar_id, requested_time, duration_minutes, timezone }) => {
+    try {
+      console.log(`[AVAILABILITY] Checking availability for ${requested_time} on calendar ${calendar_id}`);
+      
+      // Create JWT for Google OAuth (same as calendar creation)
+      const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+      let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+      
+      if (!serviceAccountEmail || !privateKey) {
+        return JSON.stringify({
+          available: false,
+          error: "Missing Google service account credentials"
+        });
+      }
+      
+      // Clean private key
+      privateKey = privateKey.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n');
+      privateKey = privateKey.replace(/^["']|["']$/g, '');
+      if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+        privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+      }
+      privateKey = privateKey.replace(/\n\n+/g, '\n');
+      
+      // Create JWT
+      const now = Math.floor(Date.now() / 1000);
+      const jwtPayload = {
+        iss: serviceAccountEmail,
+        scope: 'https://www.googleapis.com/auth/calendar',
+        aud: 'https://oauth2.googleapis.com/token',
+        exp: now + 3600,
+        iat: now
+      };
+      
+      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+      const payload = Buffer.from(JSON.stringify(jwtPayload)).toString('base64url');
+      const signData = `${header}.${payload}`;
+      
+      const sign = crypto.createSign('RSA-SHA256');
+      sign.update(signData);
+      const signature = sign.sign(privateKey, 'base64url');
+      const jwt = `${signData}.${signature}`;
+      
+      // Get access token
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion: jwt
+        })
+      });
+      
+      const tokenData = await tokenResponse.json();
+      if (!tokenResponse.ok) {
+        return JSON.stringify({
+          available: false,
+          error: "Failed to get access token"
+        });
+      }
+      
+      const accessToken = tokenData.access_token;
+      
+      // Calculate time range to check
+      const requestedStart = new Date(requested_time);
+      const requestedEnd = new Date(requestedStart.getTime() + duration_minutes * 60 * 1000);
+      
+      // Check for conflicts in requested time slot
+      const timeMin = requestedStart.toISOString();
+      const timeMax = requestedEnd.toISOString();
+      
+      console.log(`[AVAILABILITY] Checking conflicts between ${timeMin} and ${timeMax}`);
+      
+      const eventsResponse = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${calendar_id}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true`,
+        {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }
+      );
+      
+      const eventsData = await eventsResponse.json();
+      
+      if (!eventsResponse.ok) {
+        return JSON.stringify({
+          available: false,
+          error: `Calendar check failed: ${eventsData.error?.message || 'Unknown error'}`
+        });
+      }
+      
+      const conflicts = eventsData.items || [];
+      console.log(`[AVAILABILITY] Found ${conflicts.length} conflicting events`);
+      
+      // If no conflicts, requested time is available
+      if (conflicts.length === 0) {
+        return JSON.stringify({
+          available: true,
+          suggested_time: requested_time,
+          message: "Requested time is available"
+        });
+      }
+      
+      // Find alternative times
+      console.log(`[AVAILABILITY] Finding alternatives for busy slot`);
+      
+      // Helper function to check if time is within business hours (8am-8pm) in USER'S timezone
+      const isBusinessHours = (date, userTimezone) => {
+        // Convert to user's timezone for business hours check
+        const userTime = new Date(date.toLocaleString("en-US", {timeZone: userTimezone}));
+        const hour = userTime.getHours();
+        return hour >= 8 && hour < 20; // 8am to 8pm in USER'S timezone
+      };
+      
+      // Check if requested time is within user's business hours
+      const requestedInUserTz = new Date(requestedStart.toLocaleString("en-US", {timeZone: timezone}));
+      const requestedEndInUserTz = new Date(requestedEnd.toLocaleString("en-US", {timeZone: timezone}));
+      
+      if (!isBusinessHours(requestedInUserTz, timezone) || !isBusinessHours(requestedEndInUserTz, timezone)) {
+        const requestedHour = requestedInUserTz.getHours();
+        const requestedMinute = requestedInUserTz.getMinutes();
+        const timeString = `${requestedHour}:${requestedMinute.toString().padStart(2, '0')}`;
+        
+        return JSON.stringify({
+          available: false,
+          business_hours_violation: true,
+          message: `Requested time (${timeString} in your timezone) is outside business hours (8:00 AM - 8:00 PM). Please suggest a time between 8am-8pm in your timezone.`,
+          user_timezone: timezone,
+          requested_time_in_user_tz: requestedInUserTz.toISOString()
+        });
+      }
+      
+      // Priority 1: Same day, within ±4 hours
+      const sameDayAlternatives = [];
+      const requestedDate = new Date(requestedStart);
+      requestedDate.setHours(8, 0, 0, 0); // Start at 8am same day
+      
+      for (let i = 0; i < 12 * 4; i++) { // Check every 15 minutes for 12 hours (8am-8pm)
+        const testStart = new Date(requestedDate.getTime() + i * 15 * 60 * 1000);
+        const testEnd = new Date(testStart.getTime() + duration_minutes * 60 * 1000);
+        
+        // Skip if outside business hours in USER'S timezone
+        if (!isBusinessHours(testStart, timezone) || !isBusinessHours(testEnd, timezone)) continue;
+        
+        // Skip if too far from original request (>4 hours)
+        const hoursDiff = Math.abs(testStart.getTime() - requestedStart.getTime()) / (1000 * 60 * 60);
+        if (hoursDiff > 4) continue;
+        
+        // Check if this slot is free
+        const testTimeMin = testStart.toISOString();
+        const testTimeMax = testEnd.toISOString();
+        
+        const testEventsResponse = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/${calendar_id}/events?timeMin=${encodeURIComponent(testTimeMin)}&timeMax=${encodeURIComponent(testTimeMax)}&singleEvents=true`,
+          {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }
+        );
+        
+        const testEventsData = await testEventsResponse.json();
+        if (testEventsResponse.ok && (!testEventsData.items || testEventsData.items.length === 0)) {
+          sameDayAlternatives.push({
+            start_time: testStart.toISOString().replace('Z', requested_time.slice(-6)),
+            end_time: testEnd.toISOString().replace('Z', requested_time.slice(-6)),
+            distance: hoursDiff
+          });
+          
+          // Found a good alternative, use it
+          if (sameDayAlternatives.length >= 1) break;
+        }
+      }
+      
+      // If same day alternative found, use it
+      if (sameDayAlternatives.length > 0) {
+        const best = sameDayAlternatives.sort((a, b) => a.distance - b.distance)[0];
+        const suggestedTime = new Date(best.start_time);
+        const timeString = suggestedTime.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit', 
+          timeZone: timezone 
+        });
+        
+        return JSON.stringify({
+          available: false,
+          suggested_time: best.start_time,
+          suggested_end_time: best.end_time,
+          message: `Requested time is busy, but ${timeString} the same day is available`,
+          alternative_type: "same_day"
+        });
+      }
+      
+      // Priority 2: Same time next day
+      const nextDayStart = new Date(requestedStart);
+      nextDayStart.setDate(nextDayStart.getDate() + 1);
+      const nextDayEnd = new Date(nextDayStart.getTime() + duration_minutes * 60 * 1000);
+      
+      if (isBusinessHours(nextDayStart, timezone) && isBusinessHours(nextDayEnd, timezone)) {
+        const nextDayTimeMin = nextDayStart.toISOString();
+        const nextDayTimeMax = nextDayEnd.toISOString();
+        
+        const nextDayEventsResponse = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/${calendar_id}/events?timeMin=${encodeURIComponent(nextDayTimeMin)}&timeMax=${encodeURIComponent(nextDayTimeMax)}&singleEvents=true`,
+          {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }
+        );
+        
+        const nextDayEventsData = await nextDayEventsResponse.json();
+        if (nextDayEventsResponse.ok && (!nextDayEventsData.items || nextDayEventsData.items.length === 0)) {
+          const dayName = nextDayStart.toLocaleDateString('en-US', { 
+            weekday: 'long',
+            timeZone: timezone 
+          });
+          const timeString = nextDayStart.toLocaleTimeString('en-US', { 
+            hour: 'numeric', 
+            minute: '2-digit',
+            timeZone: timezone 
+          });
+          
+          return JSON.stringify({
+            available: false,
+            suggested_time: nextDayStart.toISOString().replace('Z', requested_time.slice(-6)),
+            suggested_end_time: nextDayEnd.toISOString().replace('Z', requested_time.slice(-6)),
+            message: `Requested time is busy, but the same time on ${dayName} (${timeString}) is available`,
+            alternative_type: "next_day"
+          });
+        }
+      }
+      
+      // If no good alternatives found
+      return JSON.stringify({
+        available: false,
+        message: "Requested time is busy and no suitable alternatives found within 4 hours or next day. Please suggest a different time.",
+        alternative_type: "manual_suggestion_needed"
+      });
+      
+    } catch (error) {
+      console.error('[AVAILABILITY] Error checking availability:', error);
+      return JSON.stringify({
+        available: false,
+        error: error.message
+      });
+    }
+  }
+});
+
+// Tool 3: Create calendar event (enhanced with availability checking)
 const createCalendarEventTool = new DynamicStructuredTool({
   name: "create_calendar_event",
-  description: "Create a Google Calendar event when meeting time is confirmed. DEFAULT DURATION: 30 minutes. Parse exact times (3pm = 15:00 NOT 16:00).",
+  description: "Create a Google Calendar event. ALWAYS check availability first using check_availability tool. If time is busy, use the suggested alternative time.",
   schema: z.object({
     calendar_id: z.string().default('primary').describe("Calendar ID to create event in"),
     start_time: z.string().describe("ISO datetime string for event start (e.g., 2025-09-23T15:00:00-07:00 for 3pm PDT)"),
     end_time: z.string().optional().describe("ISO datetime string for event end - if not provided, will add 30 minutes to start_time"),
     title: z.string().default("Sales Discussion").describe("Event title"),
     attendees: z.array(z.string()).describe("Array of email addresses to invite"),
-    timezone: z.string().default("America/Los_Angeles").describe("Timezone for the event")
+    timezone: z.string().default("America/Los_Angeles").describe("Timezone for the event"),
+    availability_checked: z.boolean().default(false).describe("Whether availability was already checked - should be true if using suggested time from check_availability")
   }),
-  func: async ({ calendar_id, start_time, end_time, title, attendees, timezone }) => {
+  func: async ({ calendar_id, start_time, end_time, title, attendees, timezone, availability_checked }) => {
     try {
       // Auto-calculate end_time if not provided (30 minutes default)
       if (!end_time) {
@@ -238,6 +492,16 @@ const createCalendarEventTool = new DynamicStructuredTool({
       }
       
       console.log(`[TOOL] Creating calendar event: ${title} from ${start_time} to ${end_time}`);
+      console.log(`[TOOL] Availability pre-checked: ${availability_checked}`);
+      
+      // If availability wasn't checked, return error - force use of check_availability first
+      if (!availability_checked) {
+        return JSON.stringify({
+          success: false,
+          error: "Must check availability first using check_availability tool before creating calendar events",
+          suggestion: "Use check_availability tool first, then create event with suggested time"
+        });
+      }
       console.log(`[TOOL] Timezone being used: ${timezone}`);
       console.log(`[TOOL] Calendar ID: ${calendar_id}`);
       
@@ -525,6 +789,7 @@ const storeEventTool = new DynamicStructuredTool({
 const tools = [
   getConversationTool,
   getUserSettingsTool,
+  checkAvailabilityTool,
   createCalendarEventTool,
   sendEmailTool,
   storeEventTool
@@ -592,18 +857,24 @@ BEHAVIOR SETTINGS:
 YOUR JOB:
 1. ALWAYS start by using get_user_settings tool to get current user configuration
 2. ALWAYS use get_conversation tool to understand the email thread history and context
-3. When someone proposes a meeting time, use create_calendar_event tool with USER'S timezone
+3. When someone proposes a meeting time:
+   a) FIRST use check_availability tool to verify the time is free
+   b) If busy, use the suggested alternative time from check_availability
+   c) Create calendar event with availability_checked=true
 4. Use send_email tool to reply with proper threading
 5. Use store_event tool ONLY for significant events (not internal thoughts)
 
 CALENDAR EVENT RULES:
+- MANDATORY: Always check availability before scheduling
 - DEFAULT DURATION: 30 minutes for all meetings
+- BUSINESS HOURS: Only schedule between 8:00 AM - 8:00 PM in USER'S timezone (${userTimezone})
+- TIMEZONE AWARENESS: If lead suggests 8pm PST but user is EST, that's 11pm user time = outside business hours
+- CONFLICT RESOLUTION: If requested time is busy, suggest alternatives:
+  * Priority 1: Same day within ±4 hours of original request (8am-8pm user timezone only)
+  * Priority 2: Same time next day (if within user's business hours)
+  * Always inform user about the change and why
 - TIME PARSING: Parse the EXACT time mentioned by user (3pm = 15:00, NOT 16:00)
-- If user says "3pm" create event for 15:00-15:30 in their timezone
-- If user says "2:30pm" create event for 14:30-15:00 in their timezone  
-- If no duration specified, always use 30 minutes
-- TIMEZONE: Always use user's timezone (${userTimezone})
-- TITLE: Use "Sales Discussion" unless user specifies different topic
+- TIMEZONE: Always use user's timezone (${userTimezone}) for business hours enforcement
 
 IMPORTANT RULES:
 - Use EXACTLY the dates shown above for ${userTimezone} timezone
@@ -618,10 +889,11 @@ IMPORTANT RULES:
 
 Tools available:
 - get_user_settings: Get current user configuration
-- create_calendar_event: Schedule meetings in user's timezone
+- get_conversation: View conversation history for context
+- check_availability: Check calendar conflicts and suggest alternatives (8am-8pm only)
+- create_calendar_event: Schedule meetings ONLY after checking availability
 - send_email: Send professional replies with threading
 - store_event: Log significant events only
-- get_conversation: View conversation history
 
 Provide excellent sales support using the user's personalized settings!`;
 }
@@ -715,6 +987,7 @@ export async function handler(event) {
     const tools = [
       getConversationTool,
       getUserSettingsTool,
+      checkAvailabilityTool,
       createCalendarEventTool,
       sendEmailTool,
       storeEventTool
