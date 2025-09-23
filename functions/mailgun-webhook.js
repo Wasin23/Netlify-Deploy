@@ -425,12 +425,12 @@ const storeEventTool = new DynamicStructuredTool({
   schema: z.object({
     tracking_id: z.string().describe("Tracking ID for this conversation"),
     event_type: z.string().describe("Type of event (e.g., 'ai_reply', 'lead_message', 'calendar_created')"),
-    user_agent: z.string().describe("Event content or user agent string"),
+    event_content: z.string().describe("The actual email content, reply text, or event description"),
     email_address: z.string().optional().describe("Email address involved"),
     recipient: z.string().optional().describe("Recipient email address"),
     additional_data: z.record(z.any()).optional().describe("Additional event data")
   }),
-  func: async ({ tracking_id, event_type, user_agent, email_address, recipient, additional_data }) => {
+  func: async ({ tracking_id, event_type, event_content, email_address, recipient, additional_data }) => {
     try {
       console.log(`[TOOL] Storing event: ${event_type} for ${tracking_id}`);
       
@@ -438,7 +438,7 @@ const storeEventTool = new DynamicStructuredTool({
         tracking_id,
         event_type,
         timestamp: new Date().toISOString(),
-        user_agent: user_agent.substring(0, 500), // Truncate to prevent issues
+        user_agent: event_content.substring(0, 500), // Store actual content, not user agent
         email_address: email_address || '',
         recipient: recipient || '',
         ip_address: '127.0.0.1',
@@ -462,7 +462,7 @@ const storeEventTool = new DynamicStructuredTool({
       
       const result = await milvusClient.insert({
         collection_name: 'email_tracking_events',
-        fields_data: [eventData]
+        data: [eventData] // Fix: use 'data' not 'fields_data'
       });
       
       console.log(`[TOOL] Event stored successfully in Zilliz`);
@@ -504,7 +504,7 @@ const SYSTEM_PROMPT = `You are an AI-powered sales assistant with access to tool
 1. ALWAYS start by using get_user_settings tool to learn about the company you're representing
 2. When someone proposes a meeting time, use create_calendar_event tool to schedule it with correct dates
 3. Use send_email tool to reply to prospects
-4. Use store_event tool to log interactions
+4. Use store_event tool to log important interactions (use 'event_content' parameter for actual email/reply content)
 
 CURRENT DATE/TIME INFO:
 - Today is: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
@@ -516,12 +516,13 @@ IMPORTANT RULES:
 - When you see meeting time proposals like "tomorrow at 3pm EST", create calendar event using tomorrow's date above
 - Write natural business emails, never include technical data or JSON in email content
 - Use company information from settings to personalize your responses
+- When using store_event tool, put actual email content in 'event_content' parameter (not user agent info)
 
 Tools available:
 - get_user_settings: Get company info and settings
 - create_calendar_event: Schedule meetings when times are proposed (use correct dates!)
 - send_email: Send professional replies
-- store_event: Log interactions
+- store_event: Log interactions with actual content
 - get_conversation: View conversation history
 
 Use these tools actively to provide excellent sales support.`;
@@ -649,10 +650,40 @@ Body: ${emailData.body}
 Tracking ID: ${trackingId}
 
 Please process this email appropriately. If it contains a meeting request or time proposal, create a calendar event AND send a professional reply.`;
+
+    // First, automatically log the incoming lead message
+    try {
+      await storeEventTool.func({
+        tracking_id: trackingId,
+        event_type: 'lead_message',
+        event_content: `Subject: ${emailData.subject}\n\nFrom: ${emailData.from}\n\n${emailData.body}`,
+        email_address: emailData.from,
+        recipient: emailData.to
+      });
+      console.log('[WEBHOOK] Logged incoming lead message');
+    } catch (error) {
+      console.error('[WEBHOOK] Failed to log lead message:', error);
+    }
     
     const agentResponse = await agentExecutor.invoke({
       input: input
     });
+    
+    // After agent processes, automatically log the AI response if one was generated
+    try {
+      if (agentResponse.output && agentResponse.output.trim()) {
+        await storeEventTool.func({
+          tracking_id: trackingId,
+          event_type: 'ai_reply',
+          event_content: agentResponse.output,
+          email_address: emailData.to,
+          recipient: emailData.from
+        });
+        console.log('[WEBHOOK] Logged AI response');
+      }
+    } catch (error) {
+      console.error('[WEBHOOK] Failed to log AI response:', error);
+    }
     
     console.log('[WEBHOOK] Agent response:', agentResponse);
     
