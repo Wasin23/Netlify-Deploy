@@ -370,6 +370,11 @@ const sendEmailTool = new DynamicStructuredTool({
   func: async ({ to, subject, body, in_reply_to, references, tracking_id }) => {
     try {
       console.log(`[TOOL] Sending email to: ${to}`);
+      console.log(`[TOOL] Mailgun API key available: ${!!process.env.MAILGUN_API_KEY}`);
+      
+      if (!process.env.MAILGUN_API_KEY) {
+        throw new Error('MAILGUN_API_KEY environment variable not set');
+      }
       
       const auth = Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString('base64');
       
@@ -390,14 +395,19 @@ const sendEmailTool = new DynamicStructuredTool({
       
       const response = await fetch(`https://api.mailgun.net/v3/mg.examarkchat.com/messages`, {
         method: 'POST',
-        headers: { 'Authorization': `Basic ${auth}` },
+        headers: { 
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
         body: formData
       });
       
       const result = await response.json();
+      console.log(`[TOOL] Mailgun response status: ${response.status}`);
+      console.log(`[TOOL] Mailgun response:`, result);
       
       if (!response.ok) {
-        throw new Error(`Mailgun send failed: ${result.message || 'Unknown error'}`);
+        throw new Error(`Mailgun send failed: ${result.message || JSON.stringify(result)}`);
       }
       
       console.log(`[TOOL] Email sent successfully: ${messageId}`);
