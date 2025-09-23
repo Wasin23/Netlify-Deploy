@@ -521,9 +521,21 @@ CURRENT DATE/TIME INFO:
 - Current date: ${new Date().toISOString().split('T')[0]}
 - Tomorrow's date: ${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}
 
+DATE CONSTRUCTION EXAMPLES:
+- For "tomorrow at 3pm PST": use "${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}T15:00:00-08:00"
+- For "tomorrow at 5pm EST": use "${new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]}T17:00:00-05:00"  
+- For "today at 2pm PST": use "${new Date().toISOString().split('T')[0]}T14:00:00-08:00"
+
+TIMEZONE OFFSETS:
+- PST (Pacific Standard Time): -08:00
+- EST (Eastern Standard Time): -05:00
+- CST (Central Standard Time): -06:00
+- MST (Mountain Standard Time): -07:00
+
 IMPORTANT RULES:
 - ALWAYS use tools when appropriate - this is critical for system functionality
-- When you see meeting time proposals like "tomorrow at 3pm EST", create calendar event using tomorrow's date above
+- When you see meeting time proposals like "tomorrow at 3pm PST", create calendar event using EXACTLY tomorrow's date above
+- Use the DATE CONSTRUCTION EXAMPLES above to build proper ISO datetime strings
 - Write natural business emails, never include technical data or JSON in email content
 - Use company information from settings to personalize your responses
 - When using store_event tool, put actual email content in 'event_content' parameter (not user agent info)
