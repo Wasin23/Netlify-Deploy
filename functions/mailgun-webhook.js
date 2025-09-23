@@ -219,18 +219,25 @@ const getUserSettingsTool = new DynamicStructuredTool({
 // Tool 3: Create calendar event (with proper OAuth flow)
 const createCalendarEventTool = new DynamicStructuredTool({
   name: "create_calendar_event",
-  description: "Create a Google Calendar event when meeting time is confirmed. Always use this when user agrees to a specific time.",
+  description: "Create a Google Calendar event when meeting time is confirmed. DEFAULT DURATION: 30 minutes. Parse exact times (3pm = 15:00 NOT 16:00).",
   schema: z.object({
     calendar_id: z.string().default('primary').describe("Calendar ID to create event in"),
-    start_time: z.string().describe("ISO datetime string for event start (e.g., 2025-09-23T17:00:00-07:00)"),
-    end_time: z.string().describe("ISO datetime string for event end"),
+    start_time: z.string().describe("ISO datetime string for event start (e.g., 2025-09-23T15:00:00-08:00 for 3pm PST)"),
+    end_time: z.string().optional().describe("ISO datetime string for event end - if not provided, will add 30 minutes to start_time"),
     title: z.string().default("Sales Discussion").describe("Event title"),
     attendees: z.array(z.string()).describe("Array of email addresses to invite"),
     timezone: z.string().default("America/Los_Angeles").describe("Timezone for the event")
   }),
   func: async ({ calendar_id, start_time, end_time, title, attendees, timezone }) => {
     try {
-      console.log(`[TOOL] Creating calendar event: ${title} at ${start_time}`);
+      // Auto-calculate end_time if not provided (30 minutes default)
+      if (!end_time) {
+        const startDate = new Date(start_time);
+        const endDate = new Date(startDate.getTime() + 30 * 60 * 1000); // Add 30 minutes
+        end_time = endDate.toISOString().replace('Z', start_time.slice(-6)); // Preserve timezone offset
+      }
+      
+      console.log(`[TOOL] Creating calendar event: ${title} from ${start_time} to ${end_time}`);
       
       // Create JWT for Google OAuth
       const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -579,6 +586,15 @@ YOUR JOB:
 2. When someone proposes a meeting time, use create_calendar_event tool with USER'S timezone
 3. Use send_email tool to reply with proper threading
 4. Use store_event tool ONLY for significant events (not internal thoughts)
+
+CALENDAR EVENT RULES:
+- DEFAULT DURATION: 30 minutes for all meetings
+- TIME PARSING: Parse the EXACT time mentioned by user (3pm = 15:00, NOT 16:00)
+- If user says "3pm" create event for 15:00-15:30 in their timezone
+- If user says "2:30pm" create event for 14:30-15:00 in their timezone  
+- If no duration specified, always use 30 minutes
+- TIMEZONE: Always use user's timezone (${userTimezone})
+- TITLE: Use "Sales Discussion" unless user specifies different topic
 
 IMPORTANT RULES:
 - Use EXACTLY the dates shown above for ${userTimezone} timezone
